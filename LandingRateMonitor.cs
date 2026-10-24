@@ -4,9 +4,6 @@ using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using UnityEngine;
-using UnityEngine.Rendering;
-using UnityEngine.Rendering.Universal;
-using Shapes; // SimplePlanes 2 官方矢量引擎
 using Assets.Scripts.Flight;
 using Assets.Scripts.Flight.UI;
 using Assets.Scripts.Craft;
@@ -14,12 +11,11 @@ using Assets.Scripts.Craft.Parts.Modifiers;
 
 namespace SimplePlanes2.LandingRate
 {
-    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.8.0")]
+    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "4.0.0")]
     public class LandingRateMonitor : BaseUnityPlugin
     {
-        // 快捷键配置 (彻底使用无冲突的 F6 / F7，绝不触碰游戏按键映射和 FlightGizmos)
+        // 快捷键配置 (硬重置为无冲突单键: F7 实时 G 力示波器)
         private ConfigEntry<KeyCode> _keyScope;
-        private ConfigEntry<KeyCode> _keyPath;
         private ConfigEntry<float> _hudDuration;
 
         // 官方原生私有方法高速委托
@@ -52,28 +48,10 @@ namespace SimplePlanes2.LandingRate
         private bool _liveGrounded = false;
 
         // =========================================================================
-        // 核心技术升级：完全解耦独立 URP CommandBuffer 3D 矢量线渲染
-        // 
-        // 彻底根除两处冲突：
-        // 1. 之前使用 [ / ] 键导致触发游戏原生的 "Previous Target / Next Target" 锁定切换；
-        //    现全面移至 F7 (实时示波器) 与 F6 (3D航迹线)，游戏 Controls 列表中完全空白无占用。
-        // 2. 之前向官方 FlightGizmos.Visible = true 赋值，导致误开了全机密密麻麻的升力/水浮力物理受力线；
-        //    现彻底与官方 FlightGizmos 解耦！只在主相机 beginCameraRendering 生命周期中，
-        //    通过原生的 Shapes.Draw.Command 挂入渲染队列，只画纯净的 3D 飞行航迹线！
-        // 3. 完美监听 FloatingOriginScript.Repositioned，原点平移反向补偿，航迹与地景绝对微米级静止。
-        // =========================================================================
-        private bool _showFlightPath = false;
-        private bool _subscribedFloatingOrigin = false;
-
-        // 航迹节点缓冲
-        private const int MAX_WAYPOINTS = 4000;
-        private readonly List<Vector3> _flightPoints = new List<Vector3>(MAX_WAYPOINTS);
-        private Vector3 _lastSampledPos = Vector3.zero;
-        private const float MIN_SAMPLE_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2 米自动延伸航迹线
-        private const float WIRE_THICKNESS = 0.35f;         // 3D 空间纯线状粗细 (0.35米)
-
-        // =========================================================================
-        // 模块二：高精度实时 G 力示波器 (按 F7 自由开关)
+        // 模块一：高精度实时 G 力波形示波器 (按 F7 自由开关)
+        // 1. 50Hz 物理高频持续采样，纯净记录
+        // 2. 标尺网格：1G (平飞绿线)、2G (警戒黄线)、3G (过载红线)
+        // 3. 触地瞬间自动绘制红色垂直冲击标线
         // =========================================================================
         public struct ScopeSample
         {
@@ -87,7 +65,10 @@ namespace SimplePlanes2.LandingRate
         private bool _showWaveformScope = false;
 
         // =========================================================================
-        // 模块三：着陆结算卡片 (触地自动弹出 7.5 秒，无需手动按键，纯净大字)
+        // 模块二：纯净着陆大字战报 HUD (触地全自动弹出 7.5 秒，平时 100% 静默)
+        // 1. 聚焦两大核心数据：下沉率 (SINK RATE, 30pt 大字) + 接地空速 (SPEED, 30pt 大字)
+        // 2. 底栏精确显示触地仰角与滚转角 (PITCH & ROLL)
+        // 3. 剥离虚高 G 力，还原真实航空评级 (BUTTER / GOOD / FIRM / HARD / SLAM)
         // =========================================================================
         public struct LandingRecord
         {
@@ -132,9 +113,7 @@ namespace SimplePlanes2.LandingRate
 
         private void Awake()
         {
-            // 绑定绝对无冲突的独立功能键 F7 与 F6
-            _keyScope = Config.Bind("Controls", "KeyGForceScope", KeyCode.F7, "实时 G 力示波器开关快捷键 (默认 F7，按键设置中未被占用)");
-            _keyPath = Config.Bind("Controls", "KeyFlightPath", KeyCode.F6, "3D 飞行历史轨迹线开关快捷键 (默认 F6，按键设置中未被占用)");
+            _keyScope = Config.Bind("Controls_v4", "KeyGForceScope", KeyCode.F7, "实时 G 力示波器开关快捷键 (默认 F7)");
             _hudDuration = Config.Bind("UI", "DisplayDuration", 7.5f, "着陆结算卡片停留时间(秒)");
             _totalDuration = _hudDuration.Value;
 
@@ -147,10 +126,7 @@ namespace SimplePlanes2.LandingRate
                 _scopeBuffer[i] = new ScopeSample { rawG = 1.0f, isTouchdown = false };
             }
 
-            // 监听 URP 相机渲染生命周期，直通 Shapes CommandBuffer
-            RenderPipelineManager.beginCameraRendering += OnBeginCameraRenderingDraw;
-
-            Logger.LogInfo("[LandingRateMonitor v3.8.0] 纯净无冲突系统已就绪: F7 = 示波器, F6 = 3D纯线状航迹线。");
+            Logger.LogInfo("[LandingRateMonitor v4.0.0] 架构精简完成：纯净 G 力示波器 (F7) + 自动着陆大字 HUD 已就绪。");
         }
 
         private static void InitNativeDelegates()
@@ -308,94 +284,15 @@ namespace SimplePlanes2.LandingRate
 
         private void Update()
         {
-            EnsureFloatingOriginSubscription();
-
-            // 1. 按 F7: G 力动态示波器开关
+            // 按 F7 切换实时 G 力动态示波器
             if (Input.GetKeyDown(_keyScope.Value))
             {
                 _showWaveformScope = !_showWaveformScope;
             }
 
-            // 2. 按 F6: 3D 飞行历史航迹线开关 (开启/隐藏整局全景，完全不触碰游戏原生 Gizmos)
-            if (Input.GetKeyDown(_keyPath.Value))
-            {
-                _showFlightPath = !_showFlightPath;
-            }
-
             if (_displayTimer > 0f)
             {
                 _displayTimer -= Time.deltaTime;
-            }
-        }
-
-        private void EnsureFloatingOriginSubscription()
-        {
-            if (!_subscribedFloatingOrigin && FloatingOriginScript.Instance != null)
-            {
-                try
-                {
-                    FloatingOriginScript.Instance.Repositioned += OnFloatingOriginRepositioned;
-                    _subscribedFloatingOrigin = true;
-                    Logger.LogInfo("[LandingRateMonitor] 成功订阅官方 FloatingOriginRepositioned 浮动原点位移事件！");
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogWarning("[LandingRateMonitor] 订阅 FloatingOrigin 失败: " + ex.Message);
-                }
-            }
-        }
-
-        private void OnFloatingOriginRepositioned(object sender, FloatingOriginUpdatedEventArgs e)
-        {
-            Vector3 delta = e.Delta;
-            if (delta == Vector3.zero) return;
-
-            // 整个世界坐标系原点发生突变，对缓冲池内所有航迹点执行反向平移，保持与真实地景绝对微米级静止
-            for (int i = 0; i < _flightPoints.Count; i++)
-            {
-                _flightPoints[i] -= delta;
-            }
-
-            if (_lastSampledPos != Vector3.zero)
-            {
-                _lastSampledPos -= delta;
-            }
-        }
-
-        // =========================================================================
-        // 核心渲染逻辑：直通 URP CommandBuffer，只绘制天蓝色纯线状航迹线
-        // =========================================================================
-        private void OnBeginCameraRenderingDraw(ScriptableRenderContext context, Camera cam)
-        {
-            if (!_showFlightPath || cam == null || _flightPoints.Count < 2) return;
-
-            // 过滤预览与反射相机
-            if (cam.cameraType == CameraType.Preview || cam.cameraType == CameraType.Reflection) return;
-
-            using (Draw.Command(cam, RenderPassEvent.AfterRenderingTransparents))
-            {
-                int count = _flightPoints.Count;
-                if (count < 2) return;
-
-                Draw.Matrix = Matrix4x4.identity;
-                Draw.BlendMode = ShapesBlendMode.Transparent;
-                Draw.ThicknessSpace = ThicknessSpace.Meters;
-                Draw.Thickness = WIRE_THICKNESS;
-                Draw.LineEndCaps = LineEndCap.Round;
-                Draw.LineGeometry = LineGeometry.Billboard; // 3D 全向可见立体线
-
-                Color startCol = new Color(0.20f, 0.85f, 1.0f, 0.45f); // 早期航迹半透明
-                Color endCol = new Color(0.18f, 0.95f, 1.0f, 0.95f);   // 最新航迹高亮荧光
-
-                for (int i = 0; i < count - 1; i++)
-                {
-                    float t0 = (float)i / count;
-                    float t1 = (float)(i + 1) / count;
-                    Color c0 = Color.Lerp(startCol, endCol, t0);
-                    Color c1 = Color.Lerp(startCol, endCol, t1);
-
-                    Draw.Line(_flightPoints[i], _flightPoints[i + 1], c0, c1);
-                }
             }
         }
 
@@ -461,47 +358,13 @@ namespace SimplePlanes2.LandingRate
                 }
             }
 
-            // 3. 示波器压入样本
+            // 3. 示波器压入样本 (50Hz)
             _scopeHead = (_scopeHead + 1) % SCOPE_CAPACITY;
             _scopeBuffer[_scopeHead] = new ScopeSample
             {
                 rawG = Mathf.Abs(_liveNativeVertG),
                 isTouchdown = isTouchdownEvent
             };
-
-            // 4. 连续记录整局飞行航迹线段点 (免清除设计)
-            SampleTrajectoryPoint();
-        }
-
-        private void SampleTrajectoryPoint()
-        {
-            if (_aircraft == null) return;
-
-            Vector3 centerPos = _aircraft.transform.position;
-
-            if (_lastSampledPos == Vector3.zero)
-            {
-                _lastSampledPos = centerPos;
-                return;
-            }
-
-            float distSq = (centerPos - _lastSampledPos).sqrMagnitude;
-
-            // 空间位移 > 1.2 米自动延伸航迹线
-            if (distSq >= MIN_SAMPLE_DISTANCE_SQ)
-            {
-                _lastSampledPos = centerPos;
-
-                if (_flightPoints.Count < MAX_WAYPOINTS)
-                {
-                    _flightPoints.Add(centerPos);
-                }
-                else
-                {
-                    _flightPoints.RemoveAt(0);
-                    _flightPoints.Add(centerPos);
-                }
-            }
         }
 
         private bool CheckCraftGroundedFast()
@@ -752,7 +615,7 @@ namespace SimplePlanes2.LandingRate
                 RenderGForceWaveformScope();
             }
 
-            // 2. 着陆战报大字卡片 (触地全自动弹出，平时完全静默，无需按键)
+            // 2. 着陆战报大字卡片 (触地全自动居中弹出，平时完全静默，无需任何按键)
             if (_displayTimer > 0f && !string.IsNullOrEmpty(_report.ratingTitle))
             {
                 float alpha = 1.0f;
@@ -824,17 +687,6 @@ namespace SimplePlanes2.LandingRate
 
         private void OnDestroy()
         {
-            RenderPipelineManager.beginCameraRendering -= OnBeginCameraRenderingDraw;
-
-            if (_subscribedFloatingOrigin && FloatingOriginScript.Instance != null)
-            {
-                try
-                {
-                    FloatingOriginScript.Instance.Repositioned -= OnFloatingOriginRepositioned;
-                }
-                catch {}
-            }
-
             if (_roundedCardTex != null) Destroy(_roundedCardTex);
             if (_accentTex != null) Destroy(_accentTex);
             if (_pixelWhite != null) Destroy(_pixelWhite);
