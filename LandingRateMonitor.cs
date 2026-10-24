@@ -4,19 +4,22 @@ using System.Reflection;
 using BepInEx;
 using BepInEx.Configuration;
 using UnityEngine;
-using Shapes; // 对接 SimplePlanes 2 官方内置的 URP 矢量渲染管线
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
+using Shapes; // SimplePlanes 2 官方内置 URP 矢量渲染引擎
 using Assets.Scripts.Flight;
+using Assets.Scripts.Flight.UI;
 using Assets.Scripts.Craft;
 using Assets.Scripts.Craft.Parts.Modifiers;
 
 namespace SimplePlanes2.LandingRate
 {
-    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.6.0")]
+    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.7.0")]
     public class LandingRateMonitor : BaseUnityPlugin
     {
         // 快捷键配置 (绝对无冲突单键: [ = G力示波器, ] = 3D航迹线)
-        private ConfigEntry<KeyCode> _keyScope;   // 默认 [: 开启/关闭实时 G 力波形示波器
-        private ConfigEntry<KeyCode> _keyPath;    // 默认 ]: 开启/关闭 3D 飞行历史航迹线
+        private ConfigEntry<KeyCode> _keyScope;
+        private ConfigEntry<KeyCode> _keyPath;
         private ConfigEntry<float> _hudDuration;
 
         // 官方原生私有方法高速委托
@@ -49,19 +52,38 @@ namespace SimplePlanes2.LandingRate
         private bool _liveGrounded = false;
 
         // =========================================================================
-        // 核心技术突破：对接 SimplePlanes 2 官方原生 Shapes.Polyline 矢量画线通道
-        // 1. Shapes 已完全内建注册在当前游戏相机的 UniversalRendererData 中 (ShapesRenderPass)
-        // 2. 100% 确保参与硬件深度测试，与地景飞机共同在原生 Pass 光栅化，彻底解决隐形与穿透
-        // 3. 原生 3D 抗锯齿纯线状 (Wire / Line Trajectory)，对标 X-Plane 12 专业质感
+        // 核心技术突破：实现官方 IFlightGizmo 接口并接入 FlightSceneScript.FlightGizmos
+        // 
+        // 调查真相：
+        // 1. SimplePlanes 2 采用 URP，Unity 将默认的渲染 Pass 全部关闭；
+        // 2. 官方所有的 3D 辅助线（气动中心、推力线、车轮悬挂调试线）均通过 FlightGizmos 统一托管；
+        // 3. 官方管线在 RenderPipelineManager.beginCameraRendering 中每帧调用 Shapes.Draw.Command(cam, RenderPassEvent.AfterRenderingTransparents)；
+        // 4. 只有实现了 IFlightGizmo 的对象在 DrawFlightGizmo 回调中通过 Shapes.Draw.Line / Polyline 提交指令，
+        //    才能合法进入 URP 相机的 CommandBuffer 并在 3D 空间中被光栅化与深度测试投射到屏幕上！
         // =========================================================================
-        private bool _showFlightPath = false;
-        private GameObject _shapesHostObj = null;
-        private Shapes.Polyline _shapesPolyline = null;
+        private class TrajectoryGizmoHook : MonoBehaviour, IFlightGizmo
+        {
+            public LandingRateMonitor Master;
 
+            public void OnFlightGizmosEnabled(bool enabled) { }
+
+            public void DrawFlightGizmo(Camera cam)
+            {
+                if (Master == null || !Master._showFlightPath) return;
+                Master.RenderShapesTrajectoryPass();
+            }
+        }
+
+        private bool _showFlightPath = false;
+        private TrajectoryGizmoHook _gizmoHook = null;
+        private bool _registeredToManager = false;
+
+        // 航迹节点缓冲
         private const int MAX_WAYPOINTS = 4000;
-        private readonly List<PolylinePoint> _pointsList = new List<PolylinePoint>(MAX_WAYPOINTS);
+        private readonly List<Vector3> _flightPoints = new List<Vector3>(MAX_WAYPOINTS);
         private Vector3 _lastSampledPos = Vector3.zero;
-        private const float MIN_SAMPLE_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2 米自动记录一个新线段节点
+        private const float MIN_SAMPLE_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2 米自动延伸航迹线
+        private const float WIRE_THICKNESS = 0.35f;         // 3D 空间纯线状粗细 (0.35米)
 
         // =========================================================================
         // 模块二：高精度实时 G 力示波器 (按 [ 自由开关)
@@ -75,7 +97,7 @@ namespace SimplePlanes2.LandingRate
         private const int SCOPE_CAPACITY = 140;
         private readonly ScopeSample[] _scopeBuffer = new ScopeSample[SCOPE_CAPACITY];
         private int _scopeHead = 0;
-        private bool _showWaveformScope = false; // 默认关闭，按 [ 随时开启
+        private bool _showWaveformScope = false;
 
         // =========================================================================
         // 模块三：着陆结算卡片 (触地自动弹出 7.5 秒，无需手动按键，纯净大字)
@@ -123,7 +145,6 @@ namespace SimplePlanes2.LandingRate
 
         private void Awake()
         {
-            // 绑定绝对无冲突的右侧单键
             _keyScope = Config.Bind("Controls", "KeyGForceScope", KeyCode.LeftBracket, "实时 G 力示波器开关快捷键 (默认左中括号 [)");
             _keyPath = Config.Bind("Controls", "KeyFlightPath", KeyCode.RightBracket, "3D 飞行历史轨迹线开关快捷键 (默认右中括号 ])");
             _hudDuration = Config.Bind("UI", "DisplayDuration", 7.5f, "着陆结算卡片停留时间(秒)");
@@ -133,13 +154,21 @@ namespace SimplePlanes2.LandingRate
             PrebakeUIAssets();
             PrecompileJIT();
 
-            // 初始化示波器缓冲
             for (int i = 0; i < SCOPE_CAPACITY; i++)
             {
                 _scopeBuffer[i] = new ScopeSample { rawG = 1.0f, isTouchdown = false };
             }
 
-            Logger.LogInfo("[LandingRateMonitor v3.6.0] 官方 Shapes 原生抗锯齿矢量航迹系统已就绪: [ = 示波器, ] = 3D真实航迹线。");
+            // 创建官方 IFlightGizmo 挂载宿主
+            GameObject hookObj = new GameObject("SP2_FlightTrajectoryGizmoHook");
+            DontDestroyOnLoad(hookObj);
+            _gizmoHook = hookObj.AddComponent<TrajectoryGizmoHook>();
+            _gizmoHook.Master = this;
+
+            // 监听 URP 相机渲染生命周期，双重保障光栅化 CommandBuffer 畅通
+            RenderPipelineManager.beginCameraRendering += OnBeginCameraRenderingFallback;
+
+            Logger.LogInfo("[LandingRateMonitor v3.7.0] 官方 IFlightGizmo + Shapes 真正 3D 矢量线系统就绪！[ = 示波器, ] = 航迹线");
         }
 
         private static void InitNativeDelegates()
@@ -275,44 +304,6 @@ namespace SimplePlanes2.LandingRate
             _scopeLegendStyle.alignment = TextAnchor.MiddleRight;
         }
 
-        // =========================================================================
-        // 关键组件初始化：使用游戏官方内建的 Shapes.Polyline 矢量渲染器
-        // =========================================================================
-        private void EnsureShapesPolylineRenderer()
-        {
-            if (_shapesHostObj != null && _shapesPolyline != null) return;
-
-            try
-            {
-                _shapesHostObj = new GameObject("SP2_NativeShapesTrajectory");
-
-                // 挂载在飞机世界父容器下，跟随 FloatingOrigin 浮动原点绝对同步
-                if (_aircraft != null)
-                {
-                    _shapesHostObj.layer = _aircraft.gameObject.layer;
-                    Transform container = (_aircraft.transform.parent != null) ? _aircraft.transform.parent : _aircraft.transform;
-                    _shapesHostObj.transform.SetParent(container, false);
-                }
-
-                _shapesPolyline = _shapesHostObj.AddComponent<Shapes.Polyline>();
-                
-                // 线状外观：0.35米真实 3D 空间矢量线宽，抗锯齿圆角连接
-                _shapesPolyline.Thickness = 0.35f;
-                _shapesPolyline.ThicknessSpace = ThicknessSpace.Meters;
-                _shapesPolyline.Color = new Color(0.18f, 0.85f, 1.0f, 0.90f); // 航空天蓝荧光
-                _shapesPolyline.Geometry = PolylineGeometry.Billboard;        // 3D 空间全向可见立体线
-                _shapesPolyline.Joins = PolylineJoins.Round;                  // 平滑圆角过渡
-                _shapesPolyline.ZTest = UnityEngine.Rendering.CompareFunction.LessEqual; // 参与真实深度遮挡测试
-
-                _shapesPolyline.enabled = true;
-                Logger.LogInfo("[LandingRateMonitor] 官方 Shapes.Polyline 3D 矢量航迹线已成功挂载！");
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning("[LandingRateMonitor] 初始化 Shapes.Polyline 失败: " + ex.Message);
-            }
-        }
-
         private void PrecompileJIT()
         {
             try
@@ -335,6 +326,9 @@ namespace SimplePlanes2.LandingRate
 
         private void Update()
         {
+            // 确保向官方 FlightGizmos 管理器完成注册
+            EnsureGizmoRegistration();
+
             // 1. 按 [ (LeftBracket): G 力动态示波器开关
             if (Input.GetKeyDown(_keyScope.Value))
             {
@@ -347,22 +341,81 @@ namespace SimplePlanes2.LandingRate
                 _showFlightPath = !_showFlightPath;
                 if (_showFlightPath)
                 {
-                    EnsureShapesPolylineRenderer();
-                    if (_shapesPolyline != null)
+                    // 确保官方 FlightGizmos 整体处于可见状态
+                    if (FlightSceneScript.Instance != null && FlightSceneScript.Instance.FlightGizmos != null)
                     {
-                        _shapesPolyline.enabled = true;
-                        PushAllPointsToPolyline();
+                        FlightSceneScript.Instance.FlightGizmos.Visible = true;
                     }
-                }
-                else if (_shapesPolyline != null)
-                {
-                    _shapesPolyline.enabled = false;
                 }
             }
 
             if (_displayTimer > 0f)
             {
                 _displayTimer -= Time.deltaTime;
+            }
+        }
+
+        private void EnsureGizmoRegistration()
+        {
+            if (_registeredToManager) return;
+
+            if (FlightSceneScript.Instance != null && FlightSceneScript.Instance.FlightGizmos != null && _gizmoHook != null)
+            {
+                try
+                {
+                    FlightSceneScript.Instance.FlightGizmos.RegisterGizmo(_gizmoHook);
+                    _registeredToManager = true;
+                    Logger.LogInfo("[LandingRateMonitor] 成功注册进官方 FlightGizmos 管理器！");
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning("[LandingRateMonitor] 注册 FlightGizmos 失败: " + ex.Message);
+                }
+            }
+        }
+
+        // =========================================================================
+        // 核心渲染逻辑：在经过 URP 授权的绘制阶段使用 Shapes.Draw 真实光栅化
+        // =========================================================================
+        private void OnBeginCameraRenderingFallback(ScriptableRenderContext context, Camera cam)
+        {
+            if (!_showFlightPath || cam == null || _flightPoints.Count < 2) return;
+
+            // 过滤预览/反射相机
+            if (cam.cameraType == CameraType.Preview || cam.cameraType == CameraType.Reflection) return;
+
+            // 如果尚未被 FlightGizmos 触发，以原生 Command 注入
+            using (Draw.Command(cam, RenderPassEvent.AfterRenderingTransparents))
+            {
+                RenderShapesTrajectoryPass();
+            }
+        }
+
+        public void RenderShapesTrajectoryPass()
+        {
+            int count = _flightPoints.Count;
+            if (count < 2) return;
+
+            // 配置官方 Shapes 绘制环境参数 (纯正线状 X-Plane 12 风格)
+            Draw.Matrix = Matrix4x4.identity;
+            Draw.BlendMode = ShapesBlendMode.Transparent;
+            Draw.ThicknessSpace = ThicknessSpace.Meters;
+            Draw.Thickness = WIRE_THICKNESS;
+            Draw.LineEndCaps = LineEndCap.Round;
+            Draw.LineGeometry = LineGeometry.Billboard; // 3D 空间全向可见立体线
+
+            Color startCol = new Color(0.20f, 0.85f, 1.0f, 0.50f); // 早期航迹
+            Color endCol = new Color(0.18f, 0.95f, 1.0f, 0.95f);   // 最新航迹
+
+            // 连续线段绘制 (抗锯齿 3D 矢量线)
+            for (int i = 0; i < count - 1; i++)
+            {
+                float t0 = (float)i / count;
+                float t1 = (float)(i + 1) / count;
+                Color c0 = Color.Lerp(startCol, endCol, t0);
+                Color c1 = Color.Lerp(startCol, endCol, t1);
+
+                Draw.Line(_flightPoints[i], _flightPoints[i + 1], c0, c1);
             }
         }
 
@@ -436,11 +489,11 @@ namespace SimplePlanes2.LandingRate
                 isTouchdown = isTouchdownEvent
             };
 
-            // 4. 连续记录整局飞行航迹线段点
-            SampleTrajectoryPolylinePoint();
+            // 4. 连续记录整局飞行航迹线段点 (免清除设计)
+            SampleTrajectoryPoint();
         }
 
-        private void SampleTrajectoryPolylinePoint()
+        private void SampleTrajectoryPoint()
         {
             if (_aircraft == null) return;
 
@@ -454,44 +507,21 @@ namespace SimplePlanes2.LandingRate
 
             float distSq = (centerPos - _lastSampledPos).sqrMagnitude;
 
-            // 空间位移超过 1.2 米自动记录一个新线段节点
+            // 空间位移 > 1.2 米自动延伸航迹线
             if (distSq >= MIN_SAMPLE_DISTANCE_SQ)
             {
                 _lastSampledPos = centerPos;
 
-                Vector3 localPoint = centerPos;
-                if (_shapesHostObj != null && _shapesHostObj.transform.parent != null)
+                if (_flightPoints.Count < MAX_WAYPOINTS)
                 {
-                    localPoint = _shapesHostObj.transform.parent.InverseTransformPoint(centerPos);
-                }
-
-                // 节点色彩带微弱渐变
-                Color ptColor = new Color(0.20f, 0.85f, 1.0f, 0.90f);
-                PolylinePoint pt = new PolylinePoint(localPoint, ptColor);
-
-                if (_pointsList.Count < MAX_WAYPOINTS)
-                {
-                    _pointsList.Add(pt);
+                    _flightPoints.Add(centerPos);
                 }
                 else
                 {
-                    _pointsList.RemoveAt(0);
-                    _pointsList.Add(pt);
-                }
-
-                // 若当前处于开启状态，向 Polyline 增量追加节点
-                if (_showFlightPath && _shapesPolyline != null && _pointsList.Count >= 2)
-                {
-                    _shapesPolyline.enabled = true;
-                    _shapesPolyline.SetPoints(_pointsList);
+                    _flightPoints.RemoveAt(0);
+                    _flightPoints.Add(centerPos);
                 }
             }
-        }
-
-        private void PushAllPointsToPolyline()
-        {
-            if (_shapesPolyline == null || _pointsList.Count < 2) return;
-            _shapesPolyline.SetPoints(_pointsList);
         }
 
         private bool CheckCraftGroundedFast()
@@ -603,11 +633,6 @@ namespace SimplePlanes2.LandingRate
             if (found != null)
             {
                 _aircraft = found;
-
-                if (_shapesHostObj != null)
-                {
-                    _shapesHostObj.layer = found.gameObject.layer;
-                }
 
                 List<IWheelPart> wList = found.WheelParts;
                 if (wList != null)
@@ -819,12 +844,26 @@ namespace SimplePlanes2.LandingRate
 
         private void OnDestroy()
         {
+            RenderPipelineManager.beginCameraRendering -= OnBeginCameraRenderingFallback;
+
+            if (_registeredToManager && FlightSceneScript.Instance != null && FlightSceneScript.Instance.FlightGizmos != null && _gizmoHook != null)
+            {
+                try
+                {
+                    FlightSceneScript.Instance.FlightGizmos.UnregisterGizmo(_gizmoHook);
+                }
+                catch {}
+            }
+
             if (_roundedCardTex != null) Destroy(_roundedCardTex);
             if (_accentTex != null) Destroy(_accentTex);
             if (_pixelWhite != null) Destroy(_pixelWhite);
             if (_scopeBgTex != null) Destroy(_scopeBgTex);
 
-            if (_shapesHostObj != null) Destroy(_shapesHostObj);
+            if (_gizmoHook != null && _gizmoHook.gameObject != null)
+            {
+                Destroy(_gizmoHook.gameObject);
+            }
         }
     }
 }

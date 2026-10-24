@@ -52,6 +52,7 @@ $refUnityIMGUI = Join-Path $managed "UnityEngine.IMGUIModule.dll"
 $refUnityPhysics = Join-Path $managed "UnityEngine.PhysicsModule.dll"
 $refUnityInput = Join-Path $managed "UnityEngine.InputLegacyModule.dll"
 $refUnityText = Join-Path $managed "UnityEngine.TextRenderingModule.dll"
+$refURP = Join-Path $managed "Unity.RenderPipelines.Universal.Runtime.dll"
 $refShapes = Join-Path $managed "ShapesRuntime.dll"
 
 $cmdArgs = @(
@@ -74,6 +75,7 @@ $cmdArgs = @(
     "/reference:$refUnityPhysics",
     "/reference:$refUnityInput",
     "/reference:$refUnityText",
+    "/reference:$refURP",
     "/reference:$refShapes",
     $source
 )

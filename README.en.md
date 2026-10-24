@@ -4,7 +4,7 @@
 [![BepInEx](https://img.shields.io/badge/BepInEx-5.4-green.svg)](https://github.com/BepInEx/BepInEx)
 [![Release](https://img.shields.io/github/v/release/NoraNekowww/SimplePlanes2-FlightAnalyzer)](https://github.com/NoraNekowww/SimplePlanes2-FlightAnalyzer/releases)
 
-A general-purpose flight analysis and avionics telemetry plugin for **SimplePlanes 2** (powered by BepInEx 5 Mono x64). Features high-clarity landing rate reports, a realtime G-force waveform oscilloscope, and **game-native Shapes 3D anti-aliased vector trajectory lines** (X-Plane 12-style wireline).
+A general-purpose flight analysis and avionics telemetry plugin for **SimplePlanes 2** (powered by BepInEx 5 Mono x64). Features high-clarity landing rate reports, a realtime G-force waveform oscilloscope, and **game-native URP-integrated 3D wireline flight trajectories** (X-Plane 12-style wireline).
 
 [中文文档 (Chinese)](README.md)
 
@@ -25,17 +25,19 @@ A general-purpose flight analysis and avionics telemetry plugin for **SimplePlan
 - **Reference Grid**: Labeled lines for `1.0G (level flight green)`, `2.0G (warning yellow)`, and `3.0G (limit red)`;
 - **Touchdown Marker**: Automatically drops a vertical red touchdown marker line upon wheel contact.
 
-### 3. X-Plane 12-Style Shapes 3D Vector Flight Trajectory (Key: ] )
-- **Root Cause of Previous Invisibility**:
-  - SimplePlanes 2 runs on Unity 6 with a strictly locked URP (`UniversalRendererData`). Independent release builds strip out unreferenced shaders, and any newly instantiated materials without registered URP Passes are dropped by the GPU renderer;
-  - Deep inspection of the game engine assemblies revealed that SP2 natively integrates the renowned vector rendering package **`Shapes`** (`ShapesRuntime.dll`), with a registered `ShapesRenderPass` hooked into the main camera's render pipeline;
-  - **Native Shapes.Polyline Integration**: Directly utilizes the game's own `Shapes.Polyline` component, rendering crisp, anti-aliased, 3D wireframe trajectory lines with proper depth testing and zero camera-culling issues.
+### 3. X-Plane 12-Style 3D Vector Flight Trajectory (Key: ] )
+- **Root Cause of Previous Invisibility (Graphics Pipeline Reverse Engineering)**:
+  1. **Locked URP Architecture**: SimplePlanes 2 runs on Unity 6 with an Universal Render Pipeline. Release builds enforce aggressive Shader Stripping. Any dynamically loaded material lacking a registered `UniversalForward` pass is skipped by the GPU;
+  2. **Official Native Vector Pipeline Found**: Deep assembly inspection confirmed SP2 incorporates the renowned **`Shapes`** vector engine (`ShapesRuntime.dll`);
+  3. **Official CommandBuffer Mechanism**: Native aerodynamic, thrust, and wheel debug lines implement `Assets.Scripts.Flight.UI.IFlightGizmo`, executed during `RenderPipelineManager.beginCameraRendering` using `Shapes.Draw.Command(cam, RenderPassEvent.AfterRenderingTransparents)`;
+  4. **Complete Resolution**: Implements `IFlightGizmo`, registers into `FlightSceneScript.FlightGizmos`, and directly renders anti-aliased 3D wirelines with native depth testing (`ZTest.LessEqual`). 100% rasterized and visible in engine space alongside terrain and aircraft!
+- **Wireline Aesthetics**:
+  - Clean 3D wireline geometry with **0.35m thickness** (`Billboard Geometry` + `Round EndCaps`);
+  - Smooth cyan-blue gradient with fading tail and bright leading tip;
 - **Full-Session Continuous Recording**:
-  - Stores up to **4,000 waypoint nodes** (covers the entire flight session without needing any manual reset);
+  - Stores up to **4,000 waypoint segments** (covers 6–10 minutes of entire flights without any clearing required);
   - Seamlessly records takeoff, climb, traffic patterns, 3° approach glideslope, and flare touchdown;
-- **Adaptive Distance Sampling & Zero-GC**:
-  - Adds waypoints only when displacement > 1.2m, preventing redundant point accumulation while taxiing;
-  - 0.35m vector thickness with round joint smoothing, providing high-precision trajectory aesthetics from any cockpit or external view.
+  - Adaptive sampling (displacement > 1.2m) avoids redundant vertex stacking while parked or taxiing.
 
 ---
 
@@ -46,7 +48,7 @@ Eliminated Windows-menu-trapping `Alt` combinations and native game keys (like `
 | Key | Description | Default State |
 | :---: | :--- | :---: |
 | **`[`** (LeftBracket) | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
-| **`]`** (RightBracket) | Toggle X-Plane 12-style **Shapes 3D Vector Trajectory Line** | Disabled by default |
+| **`]`** (RightBracket) | Toggle X-Plane 12-style **Shapes 3D Wireline Trajectory** | Disabled by default |
 
 > **Customizable**: You can customize these keybindings in `SimplePlanes 2/BepInEx/config/com.noraneko.sp2.landingrate.cfg`.
 
