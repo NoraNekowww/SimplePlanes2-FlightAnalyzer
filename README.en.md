@@ -4,7 +4,7 @@
 [![BepInEx](https://img.shields.io/badge/BepInEx-5.4-green.svg)](https://github.com/BepInEx/BepInEx)
 [![Release](https://img.shields.io/github/v/release/NoraNekowww/SimplePlanes2-FlightAnalyzer)](https://github.com/NoraNekowww/SimplePlanes2-FlightAnalyzer/releases)
 
-A general-purpose flight analysis and avionics telemetry plugin for **SimplePlanes 2** (powered by BepInEx 5 Mono x64). Features high-clarity landing rate reports, a realtime G-force waveform oscilloscope, and **game-native URP-integrated 3D wireline flight trajectories** (X-Plane 12-style wireline).
+A general-purpose flight analysis and avionics telemetry plugin for **SimplePlanes 2** (powered by BepInEx 5 Mono x64). Features high-clarity landing rate reports, a realtime G-force waveform oscilloscope, and **isolated URP CommandBuffer 3D wireline flight trajectories** (X-Plane 12-style wireline).
 
 [中文文档 (Chinese)](README.md)
 
@@ -20,22 +20,22 @@ A general-purpose flight analysis and avionics telemetry plugin for **SimplePlan
 - **Focus on What Matters**: Excludes unrealistic rigid-spring G-forces from landing cards, focusing purely on authentic touchdown sink rate and speed;
 - **Automatic Pop-up**: Automatically pops up upon touchdown for 7.5 seconds, totally silent during flight with zero manual hotkey needed.
 
-### 2. Realtime G-Force Waveform Oscilloscope (Key: [ )
+### 2. Realtime G-Force Waveform Oscilloscope (Key: F7 )
 - **50Hz Physical Sampling**: Top-right corner floating scope plotting 3 seconds of continuous physical G-load;
 - **Reference Grid**: Labeled lines for `1.0G (level flight green)`, `2.0G (warning yellow)`, and `3.0G (limit red)`;
 - **Touchdown Marker**: Automatically drops a vertical red touchdown marker line upon wheel contact.
 
-### 3. X-Plane 12-Style 3D Vector Flight Trajectory (Key: ] )
-- **Root Cause of Previous Invisibility (Graphics Pipeline Reverse Engineering)**:
-  1. **Locked URP Architecture**: SimplePlanes 2 runs on Unity 6 with an Universal Render Pipeline. Release builds enforce aggressive Shader Stripping. Any dynamically loaded material lacking a registered `UniversalForward` pass is skipped by the GPU;
-  2. **Official Native Vector Pipeline Found**: Deep assembly inspection confirmed SP2 incorporates the renowned **`Shapes`** vector engine (`ShapesRuntime.dll`);
-  3. **Official CommandBuffer Mechanism**: Native aerodynamic, thrust, and wheel debug lines implement `Assets.Scripts.Flight.UI.IFlightGizmo`, executed during `RenderPipelineManager.beginCameraRendering` using `Shapes.Draw.Command(cam, RenderPassEvent.AfterRenderingTransparents)`;
-  4. **Complete Resolution**: Implements `IFlightGizmo`, registers into `FlightSceneScript.FlightGizmos`, and directly renders anti-aliased 3D wirelines with native depth testing (`ZTest.LessEqual`). 100% rasterized and visible in engine space alongside terrain and aircraft!
+### 3. X-Plane 12-Style 3D Vector Flight Trajectory (Key: F6 )
+- **Root Cause & Conflict Elimination**:
+  1. **Key Conflict Resolved**: Square bracket keys `[` / `]` were natively assigned to `Previous Target / Next Target` in SimplePlanes 2. Upgraded to dedicated and unused **`F7` (Scope)** and **`F6` (3D Trajectory)**;
+  2. **Physical Vector Clutter Eliminated**: Previous versions unintentionally triggered `FlightGizmos.Visible = true`, which opened the game's internal dense green aerodynamic and buoyancy vector debug arrows. Now completely **decoupled from FlightGizmos**;
+  3. **Isolated URP CommandBuffer**: Directly hooks into the main camera's `RenderPipelineManager.beginCameraRendering` lifecycle, rendering a pure cyan-blue 3D wireline via `Shapes.Draw.Command` during the transparent pass. Completely participates in hardware depth testing (`ZTest.LessEqual`), ensuring seamless rasterization with terrain and aircraft;
+  4. **Floating Origin Synchronized**: Hooks into `FloatingOriginScript.Repositioned` to provide sub-millimeter reverse offsets whenever the world coordinates shift, keeping the flight path permanently anchored to runways and terrain.
 - **Wireline Aesthetics**:
   - Clean 3D wireline geometry with **0.35m thickness** (`Billboard Geometry` + `Round EndCaps`);
   - Smooth cyan-blue gradient with fading tail and bright leading tip;
 - **Full-Session Continuous Recording**:
-  - Stores up to **4,000 waypoint segments** (covers 6–10 minutes of entire flights without any clearing required);
+  - Stores up to **4,000 waypoint segments** (covers the entire flight session without needing any manual reset);
   - Seamlessly records takeoff, climb, traffic patterns, 3° approach glideslope, and flare touchdown;
   - Adaptive sampling (displacement > 1.2m) avoids redundant vertex stacking while parked or taxiing.
 
@@ -43,12 +43,12 @@ A general-purpose flight analysis and avionics telemetry plugin for **SimplePlan
 
 ## ⌨️ Shortcut Keys (Zero-Conflict Design)
 
-Eliminated Windows-menu-trapping `Alt` combinations and native game keys (like `P` for pause and `G` for landing gear). Upgraded to clean, dedicated single keys on the right side of the keyboard:
+Eliminated Windows-menu-trapping `Alt` combinations and native game keys (like target switching, landing gear, and pause). Upgraded to clean, dedicated function keys:
 
 | Key | Description | Default State |
 | :---: | :--- | :---: |
-| **`[`** (LeftBracket) | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
-| **`]`** (RightBracket) | Toggle X-Plane 12-style **Shapes 3D Wireline Trajectory** | Disabled by default |
+| **`F7`** | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
+| **`F6`** | Toggle X-Plane 12-style **3D Wireline Trajectory** | Disabled by default |
 
 > **Customizable**: You can customize these keybindings in `SimplePlanes 2/BepInEx/config/com.noraneko.sp2.landingrate.cfg`.
 

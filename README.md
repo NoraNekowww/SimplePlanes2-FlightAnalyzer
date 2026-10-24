@@ -4,7 +4,7 @@
 [![BepInEx](https://img.shields.io/badge/BepInEx-5.4-green.svg)](https://github.com/BepInEx/BepInEx)
 [![Release](https://img.shields.io/github/v/release/NoraNekowww/SimplePlanes2-FlightAnalyzer)](https://github.com/NoraNekowww/SimplePlanes2-FlightAnalyzer/releases)
 
-适用于 **SimplePlanes 2** 的通用飞行分析与航电辅助插件（基于 BepInEx 5 构建）。提供专业纯净的着陆参数战报、高频实时动态 G 力示波器，以及对标 **X-Plane 12** 的**游戏原生 URP 深度光栅化 3D 飞行历史航迹线（Shapes 3D Wireline）**。
+适用于 **SimplePlanes 2** 的通用飞行分析与航电辅助插件（基于 BepInEx 5 构建）。提供专业纯净的着陆参数战报、高频实时动态 G 力示波器，以及对标 **X-Plane 12** 的**独立 URP CommandBuffer 深度光栅化 3D 飞行历史航迹线（Shapes 3D Wireline）**。
 
 [English Documentation](README.en.md)
 
@@ -20,22 +20,22 @@
 - **剔除非真实 G 力干扰**：聚焦真正核心的接地下沉率、触地速度与精确姿态，战报纯净专业；
 - **全自动弹出**：接地触地时中央自动淡入弹出保持 7.5 秒，平时完全静默，无需手动按键干扰。
 
-### 2. 实时 G 力动态变化示波器（快捷键 [ ）
+### 2. 实时 G 力动态变化示波器（快捷键 F7 ）
 - **50Hz 物理高频采样**：屏幕右上角显示半透明微型飞行测试示波器，动态滚动绘制最近 3 秒真实 G 力受力波形；
 - **标准标尺网格**：清晰标注 `1.0G (平飞亮绿线)`、`2.0G (黄色警戒线)`、`3.0G (红色极限线)`；
 - **触地垂线标记**：接地瞬间在曲线上自动打下一根垂直红色标记线，起落架受压冲击波形一目了然。
 
-### 3. X-Plane 12 风格 3D 飞行历史航迹线（快捷键 ] ）
-- **为什么此前无论哪种方法都不可见？（图形管线底层调查实录）**
-  1. **URP 渲染管线限制**：SimplePlanes 2 基于 Unity 6 的 Universal Render Pipeline 构建。独立发布版本开启了严格的 Shader Stripping（着色器打包剔除），普通外部加载的材质没有合法的 UniversalForward Pass，会被 GPU 批处理直接剔除；
-  2. **官方隐藏画线通道确认**：经深度反编译与 IL 逆向，SimplePlanes 2 官方工程内建并重度使用了业界著名的高性能矢量引擎 **`Shapes`**（`ShapesRuntime.dll`）；
-  3. **官方 CommandBuffer 机制**：官方所有 3D 辅助线（如机翼升力中心、发动机推力线、悬挂调试线）均实现 `Assets.Scripts.Flight.UI.IFlightGizmo` 接口，并在主相机的 `RenderPipelineManager.beginCameraRendering` 生命周期中通过 `Shapes.Draw.Command(cam, RenderPassEvent.AfterRenderingTransparents)` 批量压入 GPU 渲染队列；
-  4. **彻底解决**：本插件接入 `IFlightGizmo` 并向 `FlightSceneScript.FlightGizmos` 注册，同时挂载 URP `beginCameraRendering` 原生通道，通过官方 `Shapes.Draw.Line` 直接在经过 URP 授权的 Pass 提交抗锯齿 3D 矢量线。**完全参与硬件 Z-Buffer 深度测试，地景可遮挡航迹、航迹可遮挡远山，100% 真实光栅化到屏幕上！**
+### 3. X-Plane 12 风格 3D 飞行历史航迹线（快捷键 F6 ）
+- **核心调查结论与冲突根除**：
+  1. **按键冲突根除**：此前中括号键 `[` / `]` 为 SimplePlanes 2 原生已绑定的 `Previous Target / Next Target`（目标循环切换），导致误触发。现全面改用完全闲置无占用的 **`F7`（示波器）** 与 **`F6`（3D航迹线）**；
+  2. **物理受力绿线根除**：此前代码误将 `FlightGizmos.Visible = true` 触发，导致开启了游戏自带的密集物理/浮力受力调试绿线。现**彻底与 FlightGizmos 物理调试系统解耦**，绝不触发全机密集绿线；
+  3. **独立 URP CommandBuffer**：直接挂载主相机 `RenderPipelineManager.beginCameraRendering` 生命周期，在透明 Pass 阶段通过 `Shapes.Draw.Command` 直接绘制纯净细腻的天蓝色 3D 矢量线。完全参与硬件 Z-Buffer 深度测试，地景可遮挡航迹、航迹可遮挡远山；
+  4. **浮动原点绝对同步（FloatingOrigin Sync）**：自动监听 `FloatingOriginScript.Repositioned` 事件，世界坐标突变时对所有点位执行微米级反向补偿，绝不漂移错位。
 - **线状外观与专业质感**：
   - 纯正立体线状（Wireline），设定为 **0.35米真实空间粗细**（Billboard Geometry + Round EndCaps）；
   - 渐变天蓝荧光色系，早期航迹半透明，机尾附近高亮；
 - **整局全量航迹（免清除设计）**：
-  - 航迹缓冲池容纳 **4000 个航迹线段点**（完整记录 6~10 分钟整局起降过程）；
+  - 航迹缓冲池容纳 **4000 个航迹线段点**（完整记录整局起降过程）；
   - 空间位移 > 1.2 米自动延伸航迹线，静止滑跑不堆叠；
   - 记录起飞滑跑、爬升转弯、五边进近 3° 下滑线到接地拉平的全套立体航迹线。
 
@@ -43,12 +43,12 @@
 
 ## ⌨️ 快捷键速查表 (绝对无冲突设计)
 
-彻底淘汰容易引发 Windows 菜单挂起（锁死油门轴）的 `Alt` 键，以及游戏原生的 `P`（暂停）、`G`（收放起落架）等按键。改用键盘右侧完全闲置、零误触的专业功能单键：
+彻底淘汰容易引发 Windows 菜单挂起（锁死油门轴）的 `Alt` 键，以及与游戏原生功能（如目标切换、起落架、暂停等）冲突的按键。采用完全闲置、零误触的专用功能键：
 
 | 快捷键 | 功能说明 | 默认状态 |
 | :---: | :--- | :---: |
-| **`[`** (左中括号) | 开启 / 关闭屏幕右上角**实时 G 力波形示波器** | 默认关闭，单键随时开关 |
-| **`]`** (右中括号) | 开启 / 关闭 X-Plane 12 风格 **Shapes 3D 矢量航迹线** | 默认关闭，一键展开整局航迹 |
+| **`F7`** | 开启 / 关闭屏幕右上角**实时 G 力波形示波器** | 默认关闭，单键随时开关 |
+| **`F6`** | 开启 / 关闭 X-Plane 12 风格 **Shapes 3D 矢量航迹线** | 默认关闭，一键展开整局航迹 |
 
 > **自由改键**：你可以在 `SimplePlanes 2/BepInEx/config/com.noraneko.sp2.landingrate.cfg` 配置文件中随意将按键修改为你习惯的任意单键或手柄按键。
 
