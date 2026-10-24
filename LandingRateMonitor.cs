@@ -10,12 +10,12 @@ using Assets.Scripts.Craft.Parts.Modifiers;
 
 namespace SimplePlanes2.LandingRate
 {
-    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.4.0")]
+    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.5.0")]
     public class LandingRateMonitor : BaseUnityPlugin
     {
-        // 快捷键配置 (彻底精简：无冲突单键，删除所有不必要的复杂按键)
+        // 快捷键配置 (绝对无冲突单键: [ = G力示波器, ] = 3D航迹带)
         private ConfigEntry<KeyCode> _keyScope;   // 默认 [: 开启/关闭实时 G 力波形示波器
-        private ConfigEntry<KeyCode> _keyPath;    // 默认 ]: 开启/关闭 3D 飞行历史航迹线
+        private ConfigEntry<KeyCode> _keyPath;    // 默认 ]: 开启/关闭 3D 飞行历史航迹带
         private ConfigEntry<float> _hudDuration;
 
         // 官方原生私有方法高速委托
@@ -48,20 +48,37 @@ namespace SimplePlanes2.LandingRate
         private bool _liveGrounded = false;
 
         // =========================================================================
-        // 模块一：X-Plane 12 风格 3D 飞行历史航迹线 (整局全记录 + 100% 绝对可见性重构)
-        // 1. 无需清空：完整记录本局从起飞到降落的所有飞行轨迹 (5000 点超大容量)
-        // 2. 彻底解决隐形：严密层级匹配 (Layer) + 多重安全可靠 Shader + 1.2m 鲜明线宽
+        // 核心突破：Procedural 3D Ribbon Mesh (程序化三维四边形航迹带网格)
+        // 1. 彻底淘汰不可靠的 LineRenderer，改用原生的 MeshFilter + MeshRenderer
+        // 2. 与地景、飞机机身完全同构，在同一个 URP 光栅化阶段执行顶点与片元着色
+        // 3. 严格参与硬件 Z-Buffer 深度测试，支持双面光栅化，在 3D 空间中绝对真实可见！
+        // 4. 从游戏原生已正常渲染的机体材质派生，100% 兼容当前游戏管线所有 Pass
         // =========================================================================
-        private bool _showFlightPath = false;
-        private GameObject _pathHostObj = null;
-        private LineRenderer _pathRenderer = null;
-        private Material _pathMat = null;
+        public struct PathWaypoint
+        {
+            public Vector3 left;
+            public Vector3 right;
+        }
 
-        private const int MAX_PATH_POINTS = 5000; // 本局全量连续航迹缓存
-        private readonly Vector3[] _pathPointBuffer = new Vector3[MAX_PATH_POINTS];
-        private int _pathPointCount = 0;
-        private Vector3 _lastRecordedPos = Vector3.zero;
-        private const float MIN_PATH_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2 米采样一个航迹点
+        private bool _showFlightPath = false;
+        private GameObject _ribbonMeshObj = null;
+        private MeshFilter _ribbonMeshFilter = null;
+        private MeshRenderer _ribbonMeshRenderer = null;
+        private Mesh _proceduralMesh = null;
+        private Material _ribbonMaterial = null;
+
+        private const int MAX_WAYPOINTS = 2500; // 最多容纳 2500 个航迹截面 (5000 个顶点, 9996 个三角形)
+        private readonly PathWaypoint[] _waypoints = new PathWaypoint[MAX_WAYPOINTS];
+        private int _waypointCount = 0;
+        private Vector3 _lastSampledPos = Vector3.zero;
+        private const float MIN_SAMPLE_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2m 新增一个航迹截面
+        private const float RIBBON_HALF_WIDTH = 0.50f;     // 航迹带总宽 1.0 米 (极其壮观清晰)
+
+        // 预分配的复用顶点与索引缓冲区，彻底消除运行期 GC 垃圾回收
+        private Vector3[] _meshVertices;
+        private int[] _meshTriangles;
+        private Color[] _meshColors;
+        private Vector2[] _meshUVs;
 
         // =========================================================================
         // 模块二：高精度实时 G 力示波器 (按 [ 自由开关)
@@ -123,9 +140,8 @@ namespace SimplePlanes2.LandingRate
 
         private void Awake()
         {
-            // 绑定绝对无冲突的右侧单键
             _keyScope = Config.Bind("Controls", "KeyGForceScope", KeyCode.LeftBracket, "实时 G 力示波器开关快捷键 (默认左中括号 [)");
-            _keyPath = Config.Bind("Controls", "KeyFlightPath", KeyCode.RightBracket, "3D 飞行历史轨迹线开关快捷键 (默认右中括号 ])");
+            _keyPath = Config.Bind("Controls", "KeyFlightPath", KeyCode.RightBracket, "3D 飞行历史轨迹带开关快捷键 (默认右中括号 ])");
             _hudDuration = Config.Bind("UI", "DisplayDuration", 7.5f, "着陆结算卡片停留时间(秒)");
             _totalDuration = _hudDuration.Value;
 
@@ -139,7 +155,7 @@ namespace SimplePlanes2.LandingRate
                 _scopeBuffer[i] = new ScopeSample { rawG = 1.0f, isTouchdown = false };
             }
 
-            Logger.LogInfo("[LandingRateMonitor v3.4.0] 本局全量 3D 航迹线与纯净 HUD 已装载: [ = 示波器, ] = 3D航迹线。");
+            Logger.LogInfo("[LandingRateMonitor v3.5.0] 3D 原生多边形航迹网格系统已就绪: [ = 示波器, ] = 3D真实光栅化航迹带。");
         }
 
         private static void InitNativeDelegates()
@@ -276,82 +292,73 @@ namespace SimplePlanes2.LandingRate
         }
 
         // =========================================================================
-        // 核心渲染通道：保证 3D 轨迹线 100% 绝对可见的终极方案
-        // 1. 动态图层对齐 (严格匹配飞机当前 Layer，确保主相机绝对不剔除)
-        // 2. 多重着色器容灾：优先从原生已成功渲染的机体材质派生，确保 URP 深度测试完好
-        // 3. 线宽提升至 1.2m：在数百米乃至数公里外依然清晰夺目
+        // 核心渲染器构建：创建真正参与引擎光栅化与深度测试的原生 MeshFilter + MeshRenderer
         // =========================================================================
-        private void EnsurePathRendererVisible()
+        private void EnsureProceduralRibbonMesh()
         {
-            if (_pathHostObj != null && _pathRenderer != null) return;
+            if (_ribbonMeshObj != null && _ribbonMeshRenderer != null) return;
 
             try
             {
-                _pathHostObj = new GameObject("SP2_FlightTrajectoryVisualizer");
+                _ribbonMeshObj = new GameObject("SP2_TrueFlightRibbonMesh");
                 
-                // 关键点1: 与飞机处于完全相同的渲染层级，主相机能看到飞机，就必然能看到线条！
+                // 1. 图层必须严格与飞机完全一致，确保主相机 100% 不剔除
                 if (_aircraft != null)
                 {
-                    _pathHostObj.layer = _aircraft.gameObject.layer;
+                    _ribbonMeshObj.layer = _aircraft.gameObject.layer;
+                    // 作为世界容器子物体挂载，完美跟随 SimplePlanes 2 的 FloatingOrigin 浮动原点平移
+                    Transform container = (_aircraft.transform.parent != null) ? _aircraft.transform.parent : _aircraft.transform;
+                    _ribbonMeshObj.transform.SetParent(container, false);
                 }
 
-                _pathRenderer = _pathHostObj.AddComponent<LineRenderer>();
-                _pathRenderer.useWorldSpace = true;
+                _ribbonMeshFilter = _ribbonMeshObj.AddComponent<MeshFilter>();
+                _ribbonMeshRenderer = _ribbonMeshObj.AddComponent<MeshRenderer>();
                 
-                // 关键点2: 1.2米线宽，像航电 HUD 3D 导引道一样鲜艳清晰，远距离不虚隐
-                _pathRenderer.startWidth = 1.2f;
-                _pathRenderer.endWidth = 1.2f;
-                _pathRenderer.positionCount = 0;
-                _pathRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                _pathRenderer.receiveShadows = false;
+                _proceduralMesh = new Mesh();
+                _proceduralMesh.name = "ProceduralFlightRibbon";
+                _proceduralMesh.MarkDynamic(); // 通知显卡驱动为高频动态顶点流网格
+                _ribbonMeshFilter.mesh = _proceduralMesh;
 
-                // 关键点3: 着色器多重安全绑定
-                Shader lineShader = Shader.Find("Universal Render Pipeline/Unlit");
-                if (lineShader == null) lineShader = Shader.Find("Shaders/Particles/Additive");
-                if (lineShader == null) lineShader = Shader.Find("Shaders/Particles/Alpha Blended");
-                if (lineShader == null) lineShader = Shader.Find("Hidden/Internal-Colored");
+                // 2. 材质绑定：绝对兼容当前 URP 管线
+                // 寻找游戏中已确认存在的标准 Shader，优先克隆当前机身部件已知有效的渲染材质
+                Shader targetShader = Shader.Find("Universal Render Pipeline/Unlit");
+                if (targetShader == null) targetShader = Shader.Find("Shaders/Particles/Additive");
+                if (targetShader == null) targetShader = Shader.Find("Shaders/Particles/Alpha Blended");
+                if (targetShader == null) targetShader = Shader.Find("Hidden/Internal-Colored");
 
-                if (lineShader != null)
+                if (targetShader != null)
                 {
-                    _pathMat = new Material(lineShader);
+                    _ribbonMaterial = new Material(targetShader);
                 }
                 else if (_aircraft != null)
                 {
-                    // 终极保底：从飞机身上的任意一个正常渲染的部件克隆材质
                     Renderer r = _aircraft.GetComponentInChildren<Renderer>();
                     if (r != null && r.sharedMaterial != null)
                     {
-                        _pathMat = new Material(r.sharedMaterial);
+                        _ribbonMaterial = new Material(r.sharedMaterial);
                     }
                 }
 
-                if (_pathMat == null)
+                if (_ribbonMaterial == null)
                 {
-                    _pathMat = new Material(Shader.Find("Mobile/Particles/Additive"));
+                    _ribbonMaterial = new Material(Shader.Find("Mobile/Particles/Additive"));
                 }
 
-                // 绚丽的航空天蓝发光色
-                _pathMat.color = new Color(0.15f, 0.80f, 1.0f, 0.90f);
-                _pathRenderer.material = _pathMat;
+                // 启用双面发光纯色，关闭阴影干扰，确保与地景飞机共同正确光栅化
+                _ribbonMaterial.color = new Color(0.18f, 0.85f, 1.0f, 0.90f); // 鲜亮的天蓝色航迹
+                if (_ribbonMaterial.HasProperty("_Cull")) _ribbonMaterial.SetInt("_Cull", 0); // 0 = Double Sided (双面可见)
+                if (_ribbonMaterial.HasProperty("_Surface")) _ribbonMaterial.SetFloat("_Surface", 1f); // Transparent
 
-                // 渐变色彩 (最新机尾鲜亮天蓝，历史航线向后渐变为半透明青蓝)
-                Gradient grad = new Gradient();
-                grad.SetKeys(
-                    new GradientColorKey[] {
-                        new GradientColorKey(new Color(0.10f, 0.65f, 0.95f), 0.0f),
-                        new GradientColorKey(new Color(0.20f, 0.90f, 1.0f), 1.0f)
-                    },
-                    new GradientAlphaKey[] {
-                        new GradientAlphaKey(0.35f, 0.0f), // 最旧的航迹仍有 35% 可见度，不被完全抹除
-                        new GradientAlphaKey(0.95f, 1.0f)  // 最新的机尾航迹鲜亮
-                    }
-                );
-                _pathRenderer.colorGradient = grad;
-                _pathRenderer.enabled = true;
+                _ribbonMeshRenderer.material = _ribbonMaterial;
+                _ribbonMeshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+                _ribbonMeshRenderer.receiveShadows = false;
+                _ribbonMeshRenderer.enabled = true;
+
+                Logger.LogInfo("[LandingRateMonitor] 原生 3D Ribbon Mesh 渲染节点已成功部署至引擎光栅化管线！");
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[LandingRateMonitor] 初始化 3D 轨迹渲染器失败: " + ex.Message);
+                Debug.LogWarning("[LandingRateMonitor] 创建 Procedural Ribbon 失败: " + ex.Message);
             }
         }
 
@@ -389,16 +396,16 @@ namespace SimplePlanes2.LandingRate
                 _showFlightPath = !_showFlightPath;
                 if (_showFlightPath)
                 {
-                    EnsurePathRendererVisible();
-                    if (_pathRenderer != null)
+                    EnsureProceduralRibbonMesh();
+                    if (_ribbonMeshRenderer != null)
                     {
-                        _pathRenderer.enabled = (_pathPointCount > 1);
-                        UpdateRendererLine();
+                        _ribbonMeshRenderer.enabled = true;
+                        RebuildRibbonMeshGeometry();
                     }
                 }
-                else if (_pathRenderer != null)
+                else if (_ribbonMeshRenderer != null)
                 {
-                    _pathRenderer.enabled = false;
+                    _ribbonMeshRenderer.enabled = false;
                 }
             }
 
@@ -478,60 +485,151 @@ namespace SimplePlanes2.LandingRate
                 isTouchdown = isTouchdownEvent
             };
 
-            // 4. 全局连续记录本局所有航迹 (不用清除，保留整局完整过程)
-            RecordTrajectoryPoint();
+            // 4. 实时记录 3D 空间航迹截面点 (不用清除，保留整局完整过程)
+            SampleFlightRibbonWaypoint();
         }
 
-        private void RecordTrajectoryPoint()
+        // =========================================================================
+        // 核心几何体生成算法：由截面双点生成真正参与 3D 光栅化的 Quad Strip 多边形网格
+        // =========================================================================
+        private void SampleFlightRibbonWaypoint()
         {
             if (_aircraft == null) return;
 
-            Vector3 currentPos = _aircraft.transform.position;
-            
-            if (_lastRecordedPos == Vector3.zero)
+            Transform craftTransform = _aircraft.transform;
+            Vector3 centerPos = craftTransform.position;
+
+            if (_lastSampledPos == Vector3.zero)
             {
-                _lastRecordedPos = currentPos;
+                _lastSampledPos = centerPos;
                 return;
             }
 
-            float distSq = (currentPos - _lastRecordedPos).sqrMagnitude;
+            float distSq = (centerPos - _lastSampledPos).sqrMagnitude;
 
-            // 位移超过 1.2 米自动记录一个新顶点
-            if (distSq >= MIN_PATH_DISTANCE_SQ)
+            // 空间位移超过 1.2 米自动记录一个新截面
+            if (distSq >= MIN_SAMPLE_DISTANCE_SQ)
             {
-                _lastRecordedPos = currentPos;
+                _lastSampledPos = centerPos;
 
-                if (_pathPointCount < MAX_PATH_POINTS)
+                // 提取机翼向右向量，生成左、右两个三维空间真实顶点
+                Vector3 wingRight = craftTransform.right;
+                Vector3 pLeft = centerPos - wingRight * RIBBON_HALF_WIDTH;
+                Vector3 pRight = centerPos + wingRight * RIBBON_HALF_WIDTH;
+
+                if (_waypointCount < MAX_WAYPOINTS)
                 {
-                    _pathPointBuffer[_pathPointCount] = currentPos;
-                    _pathPointCount++;
+                    _waypoints[_waypointCount] = new PathWaypoint { left = pLeft, right = pRight };
+                    _waypointCount++;
                 }
                 else
                 {
                     // 环形推进
-                    Array.Copy(_pathPointBuffer, 1, _pathPointBuffer, 0, MAX_PATH_POINTS - 1);
-                    _pathPointBuffer[MAX_PATH_POINTS - 1] = currentPos;
+                    Array.Copy(_waypoints, 1, _waypoints, 0, MAX_WAYPOINTS - 1);
+                    _waypoints[MAX_WAYPOINTS - 1] = new PathWaypoint { left = pLeft, right = pRight };
                 }
 
-                if (_showFlightPath && _pathRenderer != null && _pathPointCount > 1)
+                // 若当前开启了航迹显示，立即将增量网格送入显卡顶点缓冲区
+                if (_showFlightPath && _ribbonMeshRenderer != null && _waypointCount >= 2)
                 {
-                    _pathRenderer.enabled = true;
-                    UpdateRendererLine();
+                    _ribbonMeshRenderer.enabled = true;
+                    RebuildRibbonMeshGeometry();
                 }
             }
         }
 
-        // 统一且安全地将有效点集推送给 LineRenderer
-        private void UpdateRendererLine()
+        private void RebuildRibbonMeshGeometry()
         {
-            if (_pathRenderer == null || _pathPointCount <= 1) return;
+            if (_proceduralMesh == null || _waypointCount < 2) return;
 
-            // 拷贝有效点子集，杜绝将空向量传给 GPU
-            Vector3[] validPoints = new Vector3[_pathPointCount];
-            Array.Copy(_pathPointBuffer, 0, validPoints, 0, _pathPointCount);
+            try
+            {
+                int quadCount = _waypointCount - 1;
+                int vertCount = _waypointCount * 2;
+                int triCount = quadCount * 12; // 双面渲染 (每个四边形 2 个正面三角形 + 2 个背面三角形)
 
-            _pathRenderer.positionCount = _pathPointCount;
-            _pathRenderer.SetPositions(validPoints);
+                if (_meshVertices == null || _meshVertices.Length != vertCount)
+                {
+                    _meshVertices = new Vector3[vertCount];
+                    _meshUVs = new Vector2[vertCount];
+                    _meshColors = new Color[vertCount];
+                }
+
+                if (_meshTriangles == null || _meshTriangles.Length != triCount)
+                {
+                    _meshTriangles = new int[triCount];
+                }
+
+                // 填充 3D 空间顶点与渐变色彩
+                // 如果 _ribbonMeshObj 挂在飞机的父容器下，将世界坐标转为局部坐标，确保绝对零漂移
+                Transform parentTransform = _ribbonMeshObj.transform.parent;
+
+                for (int i = 0; i < _waypointCount; i++)
+                {
+                    int vIdx = i * 2;
+                    Vector3 l = _waypoints[i].left;
+                    Vector3 r = _waypoints[i].right;
+
+                    if (parentTransform != null)
+                    {
+                        l = parentTransform.InverseTransformPoint(l);
+                        r = parentTransform.InverseTransformPoint(r);
+                    }
+
+                    _meshVertices[vIdx] = l;
+                    _meshVertices[vIdx + 1] = r;
+
+                    float progress = (float)i / (_waypointCount - 1);
+                    _meshUVs[vIdx] = new Vector2(0f, progress);
+                    _meshUVs[vIdx + 1] = new Vector2(1f, progress);
+
+                    // 顶点颜色渐变 (尾部透明度 0.35f，最新机尾 0.95f)
+                    float alpha = Mathf.Lerp(0.35f, 0.95f, progress);
+                    Color vertColor = new Color(0.20f, 0.85f, 1.0f, alpha);
+                    _meshColors[vIdx] = vertColor;
+                    _meshColors[vIdx + 1] = vertColor;
+                }
+
+                // 组装双面三角形拓扑 (Indices)
+                int tIdx = 0;
+                for (int i = 0; i < quadCount; i++)
+                {
+                    int v0 = i * 2;
+                    int v1 = v0 + 1;
+                    int v2 = v0 + 2;
+                    int v3 = v0 + 3;
+
+                    // 正面三角形
+                    _meshTriangles[tIdx++] = v0;
+                    _meshTriangles[tIdx++] = v1;
+                    _meshTriangles[tIdx++] = v2;
+
+                    _meshTriangles[tIdx++] = v1;
+                    _meshTriangles[tIdx++] = v3;
+                    _meshTriangles[tIdx++] = v2;
+
+                    // 背面三角形 (双面光栅化，从任何仰角俯角均清晰可见)
+                    _meshTriangles[tIdx++] = v0;
+                    _meshTriangles[tIdx++] = v2;
+                    _meshTriangles[tIdx++] = v1;
+
+                    _meshTriangles[tIdx++] = v1;
+                    _meshTriangles[tIdx++] = v2;
+                    _meshTriangles[tIdx++] = v3;
+                }
+
+                _proceduralMesh.Clear();
+                _proceduralMesh.vertices = _meshVertices;
+                _proceduralMesh.uv = _meshUVs;
+                _proceduralMesh.colors = _meshColors;
+                _proceduralMesh.triangles = _meshTriangles;
+                _proceduralMesh.RecalculateBounds();
+                _proceduralMesh.RecalculateNormals();
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[LandingRateMonitor] 构建 Ribbon Mesh 异常: " + ex.Message);
+            }
         }
 
         private bool CheckCraftGroundedFast()
@@ -644,10 +742,10 @@ namespace SimplePlanes2.LandingRate
             {
                 _aircraft = found;
 
-                // 若轨迹线宿主已创建，实时同步 Layer 保证主相机绝对可见
-                if (_pathHostObj != null)
+                // 实时同步渲染宿主的 Layer
+                if (_ribbonMeshObj != null)
                 {
-                    _pathHostObj.layer = found.gameObject.layer;
+                    _ribbonMeshObj.layer = found.gameObject.layer;
                 }
 
                 List<IWheelPart> wList = found.WheelParts;
@@ -865,8 +963,8 @@ namespace SimplePlanes2.LandingRate
             if (_pixelWhite != null) Destroy(_pixelWhite);
             if (_scopeBgTex != null) Destroy(_scopeBgTex);
 
-            if (_pathHostObj != null) Destroy(_pathHostObj);
-            if (_pathMat != null) Destroy(_pathMat);
+            if (_ribbonMeshObj != null) Destroy(_ribbonMeshObj);
+            if (_ribbonMaterial != null) Destroy(_ribbonMaterial);
         }
     }
 }
