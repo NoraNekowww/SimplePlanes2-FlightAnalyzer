@@ -11,14 +11,14 @@ using Assets.Scripts.Craft.Parts.Modifiers;
 
 namespace SimplePlanes2.LandingRate
 {
-    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.0.0")]
+    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.1.0")]
     public class LandingRateMonitor : BaseUnityPlugin
     {
-        // 快捷键配置
-        private ConfigEntry<KeyCode> _toggleHudKey;     // F7: 着陆战报卡片
-        private ConfigEntry<KeyCode> _toggleScopeKey;   // F8: G力变化示波器
-        private ConfigEntry<KeyCode> _togglePathKey;    // F9: 3D历史轨迹线开关
-        private ConfigEntry<KeyCode> _clearPathKey;     // F10: 清空轨迹线
+        // 快捷键配置 (使用 BepInEx 原生 KeyboardShortcut，默认使用 Alt 组合键，彻底杜绝单键与游戏功能冲突)
+        private ConfigEntry<KeyboardShortcut> _shortcutHud;     // 默认 Alt + L: 着陆战报卡片
+        private ConfigEntry<KeyboardShortcut> _shortcutScope;   // 默认 Alt + G: G力动态示波器
+        private ConfigEntry<KeyboardShortcut> _shortcutPath;    // 默认 Alt + P: 3D历史航迹线
+        private ConfigEntry<KeyboardShortcut> _shortcutClear;   // 默认 Alt + C: 清空航迹线
         private ConfigEntry<float> _hudDuration;
 
         // 官方原生私有方法高速委托
@@ -77,7 +77,7 @@ namespace SimplePlanes2.LandingRate
         private const int SCOPE_CAPACITY = 140;
         private readonly ScopeSample[] _scopeBuffer = new ScopeSample[SCOPE_CAPACITY];
         private int _scopeHead = 0;
-        private bool _showWaveformScope = false; // 按 F8 可开关
+        private bool _showWaveformScope = false; // 按 Alt+G 可开关
 
         // =========================================================================
         // 模块三：着陆结算卡片 (去除非真实 G 力后的高纯度航空战报)
@@ -126,10 +126,12 @@ namespace SimplePlanes2.LandingRate
 
         private void Awake()
         {
-            _toggleHudKey = Config.Bind("Controls", "ToggleHudKey", KeyCode.F7, "着陆战报卡片手动呼出/关闭快捷键");
-            _toggleScopeKey = Config.Bind("Controls", "ToggleScopeKey", KeyCode.F8, "实时 G 力波形示波器开关快捷键");
-            _togglePathKey = Config.Bind("Controls", "TogglePathKey", KeyCode.F9, "X-Plane 12 风格 3D 飞行轨迹线开关快捷键");
-            _clearPathKey = Config.Bind("Controls", "ClearPathKey", KeyCode.F10, "一键清空重置当前飞行轨迹线");
+            // 采用 Alt 组合键，并在 BepInEx 配置中生成人性化提示，支持用户任意自定义
+            _shortcutHud = Config.Bind("Shortcuts", "ShortcutLandingHUD", new KeyboardShortcut(KeyCode.L, KeyCode.LeftAlt), "呼出/关闭着陆战报卡片快捷键 (默认 Alt+L)");
+            _shortcutScope = Config.Bind("Shortcuts", "ShortcutGForceScope", new KeyboardShortcut(KeyCode.G, KeyCode.LeftAlt), "实时 G 力示波器开关快捷键 (默认 Alt+G)");
+            _shortcutPath = Config.Bind("Shortcuts", "ShortcutFlightPath", new KeyboardShortcut(KeyCode.P, KeyCode.LeftAlt), "3D 飞行历史轨迹线开关快捷键 (默认 Alt+P)");
+            _shortcutClear = Config.Bind("Shortcuts", "ShortcutClearPath", new KeyboardShortcut(KeyCode.C, KeyCode.LeftAlt), "一键清空重置飞行轨迹线快捷键 (默认 Alt+C)");
+            
             _hudDuration = Config.Bind("UI", "DisplayDuration", 7.5f, "着陆结算卡片停留时间(秒)");
             _totalDuration = _hudDuration.Value;
 
@@ -144,7 +146,7 @@ namespace SimplePlanes2.LandingRate
                 _scopeBuffer[i] = new ScopeSample { rawG = 1.0f, isTouchdown = false };
             }
 
-            Logger.LogInfo("[LandingRateMonitor v3.0.0] 通用飞行分析仪已装载: F7=着陆卡片, F8=G力示波器, F9=3D航迹线, F10=清空航迹。");
+            Logger.LogInfo("[LandingRateMonitor v3.1.0] 快捷键已绑定: Alt+L=着陆卡片, Alt+G=G力示波器, Alt+P=3D航迹线, Alt+C=清空航迹 (支持在 config 中自由修改)。");
         }
 
         private static void InitNativeDelegates()
@@ -280,9 +282,6 @@ namespace SimplePlanes2.LandingRate
             _scopeLegendStyle.alignment = TextAnchor.MiddleRight;
         }
 
-        // =========================================================================
-        // 初始化 3D 飞行轨迹线渲染器 (X-Plane 12 风格)
-        // =========================================================================
         private void InitFlightPathRenderer()
         {
             if (_pathLineObj != null) return;
@@ -298,7 +297,6 @@ namespace SimplePlanes2.LandingRate
                 _pathLineRenderer.endWidth = 0.35f;
                 _pathLineRenderer.positionCount = 0;
 
-                // 寻找可用的发光或透明 Unlit Shader
                 Shader lineShader = Shader.Find("Universal Render Pipeline/Unlit");
                 if (lineShader == null) lineShader = Shader.Find("Sprites/Default");
                 if (lineShader == null) lineShader = Shader.Find("Hidden/Internal-Colored");
@@ -308,7 +306,6 @@ namespace SimplePlanes2.LandingRate
 
                 _pathLineRenderer.material = _pathLineMaterial;
 
-                // 颜色渐变 (首段高亮天蓝，尾段透明渐隐)
                 Gradient grad = new Gradient();
                 grad.SetKeys(
                     new GradientColorKey[] {
@@ -316,8 +313,8 @@ namespace SimplePlanes2.LandingRate
                         new GradientColorKey(new Color(0.15f, 0.65f, 0.95f), 1.0f)
                     },
                     new GradientAlphaKey[] {
-                        new GradientAlphaKey(0.20f, 0.0f), // 最旧的尾部半透明渐隐
-                        new GradientAlphaKey(0.85f, 1.0f)  // 最新飞过的机尾高亮
+                        new GradientAlphaKey(0.20f, 0.0f), // 尾部渐隐
+                        new GradientAlphaKey(0.85f, 1.0f)  // 机尾高亮
                     }
                 );
                 _pathLineRenderer.colorGradient = grad;
@@ -351,8 +348,8 @@ namespace SimplePlanes2.LandingRate
 
         private void Update()
         {
-            // 1. F7: 着陆大字卡片手动开关
-            if (Input.GetKeyDown(_toggleHudKey.Value))
+            // 1. Alt+L: 着陆大字卡片开关
+            if (_shortcutHud.Value.IsDown())
             {
                 if (_displayTimer > 0f)
                 {
@@ -364,14 +361,14 @@ namespace SimplePlanes2.LandingRate
                 }
             }
 
-            // 2. F8: G 力变化示波器开关
-            if (Input.GetKeyDown(_toggleScopeKey.Value))
+            // 2. Alt+G: G 力动态示波器开关
+            if (_shortcutScope.Value.IsDown())
             {
                 _showWaveformScope = !_showWaveformScope;
             }
 
-            // 3. F9: 3D 历史轨迹线实时开关
-            if (Input.GetKeyDown(_togglePathKey.Value))
+            // 3. Alt+P: 3D 飞行历史轨迹线开关
+            if (_shortcutPath.Value.IsDown())
             {
                 _showFlightPath = !_showFlightPath;
                 if (_pathLineRenderer != null)
@@ -380,8 +377,8 @@ namespace SimplePlanes2.LandingRate
                 }
             }
 
-            // 4. F10: 一键清空航迹线
-            if (Input.GetKeyDown(_clearPathKey.Value))
+            // 4. Alt+C: 一键清空重置航迹线
+            if (_shortcutClear.Value.IsDown())
             {
                 ClearFlightPath();
             }
@@ -467,7 +464,7 @@ namespace SimplePlanes2.LandingRate
                 isTouchdown = isTouchdownEvent
             };
 
-            // 4. 3D 飞行历史轨迹线自适应采样 (位移 > 1.2m 才记录点，极致低开销)
+            // 4. 3D 飞行历史轨迹线自适应采样
             RecordTrajectoryPoint();
         }
 
@@ -478,7 +475,6 @@ namespace SimplePlanes2.LandingRate
             Vector3 currentPos = _aircraft.transform.position;
             float distSq = (currentPos - _lastRecordedPos).sqrMagnitude;
 
-            // 位移超过 1.2 米才添加新点，避免静止或慢滑时堆叠重复点
             if (distSq >= MIN_PATH_DISTANCE_SQ)
             {
                 _lastRecordedPos = currentPos;
@@ -490,12 +486,10 @@ namespace SimplePlanes2.LandingRate
                 }
                 else
                 {
-                    // 环形推进 (向前移动一个元素，移出最早的点)
                     Array.Copy(_pathPointBuffer, 1, _pathPointBuffer, 0, MAX_PATH_POINTS - 1);
                     _pathPointBuffer[MAX_PATH_POINTS - 1] = currentPos;
                 }
 
-                // 仅在开启显示时同步至 LineRenderer，0 冗余开销
                 if (_showFlightPath && _pathLineRenderer != null)
                 {
                     _pathLineRenderer.positionCount = _pathPointCount;
@@ -528,7 +522,6 @@ namespace SimplePlanes2.LandingRate
 
         private void TriggerLanding(float touchdownFpm)
         {
-            // 官方原生 InstrumentData 解算 Pitch & Roll，做 [-180, 180] 归一化
             float pitch = _aircraft.InstrumentData.Pitch;
             float roll = _aircraft.InstrumentData.Roll;
             while (roll > 180f) roll -= 360f;
@@ -540,9 +533,6 @@ namespace SimplePlanes2.LandingRate
             _displayTimer = _totalDuration;
         }
 
-        // =========================================================================
-        // 着陆战报：彻底移除易引起误解的非真实 G 力，聚焦下沉率、接地速度与接地姿态！
-        // =========================================================================
         private void BuildReportStrings(ref LandingRecord rep, float fpm, float speedMps, float pitch, float roll)
         {
             float speedKts = speedMps * 1.943844f;
@@ -556,31 +546,30 @@ namespace SimplePlanes2.LandingRate
             rep.pitch = pitch;
             rep.roll = roll;
 
-            // 航空分级标准 (纯粹基于接地下沉率 FPM)
             if (fpm < 100f)
             {
                 rep.ratingTitle = "BUTTER TOUCHDOWN 🧈";
-                rep.accentColor = new Color(0.20f, 0.95f, 0.45f); // 翠绿
+                rep.accentColor = new Color(0.20f, 0.95f, 0.45f);
             }
             else if (fpm <= 220f)
             {
                 rep.ratingTitle = "GOOD LANDING ✨";
-                rep.accentColor = new Color(0.25f, 0.85f, 1.0f);  // 科技天蓝
+                rep.accentColor = new Color(0.25f, 0.85f, 1.0f);
             }
             else if (fpm <= 380f)
             {
                 rep.ratingTitle = "FIRM LANDING ✈";
-                rep.accentColor = new Color(1.0f, 0.85f, 0.25f);  // 琥珀黄
+                rep.accentColor = new Color(1.0f, 0.85f, 0.25f);
             }
             else if (fpm <= 550f)
             {
                 rep.ratingTitle = "HARD LANDING ⚠";
-                rep.accentColor = new Color(1.0f, 0.50f, 0.15f);  // 警示橙
+                rep.accentColor = new Color(1.0f, 0.50f, 0.15f);
             }
             else
             {
                 rep.ratingTitle = "SLAM IMPACT 💥";
-                rep.accentColor = new Color(1.0f, 0.22f, 0.25f);  // 警报红
+                rep.accentColor = new Color(1.0f, 0.22f, 0.25f);
             }
 
             rep.strFpmMain = "-" + rep.fpm.ToString("F0");
@@ -659,7 +648,7 @@ namespace SimplePlanes2.LandingRate
         }
 
         // =========================================================================
-        // 渲染实时 G 力动态变化示波器 (F8 开关)
+        // 渲染实时 G 力动态变化示波器 (Alt+G 开关)
         // =========================================================================
         private void RenderGForceWaveformScope()
         {
@@ -671,7 +660,7 @@ namespace SimplePlanes2.LandingRate
             GUI.DrawTexture(new Rect(scopeX, scopeY, scopeW, scopeH), _scopeBgTex);
 
             DrawShadowLabel(new Rect(scopeX + 10, scopeY + 6, 140, 16),
-                "G-LOAD SCOPE [F8]", _scopeTitleStyle, _scopeTitleStyle.normal.textColor);
+                "G-LOAD SCOPE [Alt+G]", _scopeTitleStyle, _scopeTitleStyle.normal.textColor);
 
             string legend = string.Format("V/S:{0,4:F0} | LIVE:<color={1}>+{2:F2}G</color>",
                 _liveFpm, _liveNativeVertG > 2.0f ? "#FFAA33" : "#55FF55", _liveNativeVertG);
@@ -747,13 +736,13 @@ namespace SimplePlanes2.LandingRate
                 return;
             }
 
-            // 1. 实时 G 力示波器 (按 F8 开关)
+            // 1. 实时 G 力示波器 (按 Alt+G 开关)
             if (_showWaveformScope && _aircraft != null)
             {
                 RenderGForceWaveformScope();
             }
 
-            // 2. 着陆瞬间居中弹出的战报大字卡片 (按 F7 开关)
+            // 2. 着陆瞬间居中弹出的战报大字卡片 (按 Alt+L 开关)
             if (_displayTimer > 0f && !string.IsNullOrEmpty(_report.ratingTitle))
             {
                 float alpha = 1.0f;

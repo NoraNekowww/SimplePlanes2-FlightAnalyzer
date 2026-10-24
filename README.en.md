@@ -21,12 +21,12 @@ A general-purpose flight analysis and avionics telemetry plugin for **SimplePlan
 - **Native Jundroo-Style Rounded Glass**: SDF (Signed Distance Field) pre-baked frosted glass dark panel with smooth 14px anti-aliased corners;
 - **Zero-Frame Warm-up**: Pre-bakes FreeType glyph atlases and shader passes during the first 2 loading frames, completely eliminating first-touchdown stutter.
 
-### 2. Realtime G-Force Waveform Oscilloscope (F8)
+### 2. Realtime G-Force Waveform Oscilloscope (Alt + G)
 - **50Hz Physical Sampling**: Top-right corner floating scope plotting 3 seconds of continuous physical G-load;
 - **Reference Grid**: Labeled lines for `1.0G (level flight green)`, `2.0G (warning yellow)`, and `3.0G (limit red)`;
 - **Touchdown Marker**: Automatically drops a vertical red touchdown marker line upon wheel contact.
 
-### 3. X-Plane 12-Style 3D Flight Path Trajectory (F9 / F10)
+### 3. X-Plane 12-Style 3D Flight Path Trajectory (Alt + P / Alt + C)
 - **Approach & Pattern Review**: Renders an in-world glowing cyan ribbon trajectory to inspect your 3° glide slope, flare curve, and traffic pattern;
 - **Extreme Performance & Zero-GC**:
   - Driven by Unity-native `LineRenderer` and GPU Unlit shaders;
@@ -36,14 +36,16 @@ A general-purpose flight analysis and avionics telemetry plugin for **SimplePlan
 
 ---
 
-## ⌨️ Shortcut Keys
+## ⌨️ Shortcut Keys (Non-Conflicting Design)
+
+All shortcuts use **`Alt` modifier combos** to avoid conflicting with game-native F1–F12 keys and other mods. You can freely customize any single key or combination in `BepInEx/config/com.noraneko.sp2.landingrate.cfg`.
 
 | Key | Description | Default State |
 | :---: | :--- | :---: |
-| **`F7`** | Show / Hide the **Landing Report HUD** | Pops up upon touchdown for 7.5s |
-| **`F8`** | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
-| **`F9`** | Toggle X-Plane 12-style **3D Flight Path Trajectory** | Disabled by default |
-| **`F10`** | **Clear and reset current flight trajectory path** | Ready anytime |
+| **`Alt + L`** | Show / Hide the **Landing Report HUD** | Pops up upon touchdown for 7.5s |
+| **`Alt + G`** | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
+| **`Alt + P`** | Toggle X-Plane 12-style **3D Flight Path Trajectory** | Disabled by default |
+| **`Alt + C`** | **Clear and reset current flight trajectory path** | Ready anytime |
 
 ---
 
