@@ -77,6 +77,7 @@ namespace SimplePlanes2.LandingRate
         private bool _showFlightPath = false;
         private TrajectoryGizmoHook _gizmoHook = null;
         private bool _registeredToManager = false;
+        private bool _subscribedFloatingOrigin = false;
 
         // 航迹节点缓冲
         private const int MAX_WAYPOINTS = 4000;
@@ -357,20 +358,55 @@ namespace SimplePlanes2.LandingRate
 
         private void EnsureGizmoRegistration()
         {
-            if (_registeredToManager) return;
-
-            if (FlightSceneScript.Instance != null && FlightSceneScript.Instance.FlightGizmos != null && _gizmoHook != null)
+            if (!_registeredToManager)
             {
-                try
+                if (FlightSceneScript.Instance != null && FlightSceneScript.Instance.FlightGizmos != null && _gizmoHook != null)
                 {
-                    FlightSceneScript.Instance.FlightGizmos.RegisterGizmo(_gizmoHook);
-                    _registeredToManager = true;
-                    Logger.LogInfo("[LandingRateMonitor] 成功注册进官方 FlightGizmos 管理器！");
+                    try
+                    {
+                        FlightSceneScript.Instance.FlightGizmos.RegisterGizmo(_gizmoHook);
+                        _registeredToManager = true;
+                        Logger.LogInfo("[LandingRateMonitor] 成功注册进官方 FlightGizmos 管理器！");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning("[LandingRateMonitor] 注册 FlightGizmos 失败: " + ex.Message);
+                    }
                 }
-                catch (Exception ex)
+            }
+
+            if (!_subscribedFloatingOrigin)
+            {
+                if (FloatingOriginScript.Instance != null)
                 {
-                    Debug.LogWarning("[LandingRateMonitor] 注册 FlightGizmos 失败: " + ex.Message);
+                    try
+                    {
+                        FloatingOriginScript.Instance.Repositioned += OnFloatingOriginRepositioned;
+                        _subscribedFloatingOrigin = true;
+                        Logger.LogInfo("[LandingRateMonitor] 成功订阅官方 FloatingOriginRepositioned 浮动原点位移事件！");
+                    }
+                    catch (Exception ex)
+                    {
+                        Debug.LogWarning("[LandingRateMonitor] 订阅 FloatingOrigin 失败: " + ex.Message);
+                    }
                 }
+            }
+        }
+
+        private void OnFloatingOriginRepositioned(object sender, FloatingOriginUpdatedEventArgs e)
+        {
+            Vector3 delta = e.Delta;
+            if (delta == Vector3.zero) return;
+
+            // 整个世界坐标系原点发生突变，对缓冲池内所有航迹点执行反向平移，保持与真实地景绝对微米级静止
+            for (int i = 0; i < _flightPoints.Count; i++)
+            {
+                _flightPoints[i] -= delta;
+            }
+
+            if (_lastSampledPos != Vector3.zero)
+            {
+                _lastSampledPos -= delta;
             }
         }
 
@@ -845,6 +881,15 @@ namespace SimplePlanes2.LandingRate
         private void OnDestroy()
         {
             RenderPipelineManager.beginCameraRendering -= OnBeginCameraRenderingFallback;
+
+            if (_subscribedFloatingOrigin && FloatingOriginScript.Instance != null)
+            {
+                try
+                {
+                    FloatingOriginScript.Instance.Repositioned -= OnFloatingOriginRepositioned;
+                }
+                catch {}
+            }
 
             if (_registeredToManager && FlightSceneScript.Instance != null && FlightSceneScript.Instance.FlightGizmos != null && _gizmoHook != null)
             {
