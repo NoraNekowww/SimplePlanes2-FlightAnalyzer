@@ -1,0 +1,20 @@
+# Build outputs
+bin/
+obj/
+artifacts/
+dist/
+*.dll
+*.pdb
+*.zip
+
+# IDE / Editor files
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+
+# OS temporary
+Thumbs.db
+[Dd]esktop.ini
+$RECYCLE.BIN/
