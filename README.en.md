@@ -13,39 +13,41 @@ A general-purpose flight analysis and avionics telemetry plugin for **SimplePlan
 ## 🌟 Key Features
 
 ### 1. Clean & Focused Landing Rate HUD
-- **Big-Number Focus**:
+- **Dual Big-Number Focus**:
   - **SINK RATE**: `30pt` bold font with rating-colored highlights (e.g. `-142 FPM (0.72 m/s)`);
   - **TOUCHDOWN SPEED**: `30pt` bold font in bright white (e.g. `125 KTS (232 km/h)`);
   - **Precise Attitude (PITCH & ROLL)**: Directly bound to game-native quaternion solver, completely eliminating Euler angle gimbal lock and coupling artifacts (e.g. `PITCH +3.8° | ROLL -0.2°`);
-- **Physics Anti-Bounce Buffer**: Captures the exact touchdown sink rate prior to ground impact rebound;
+- **Focus on What Matters**: Excludes unrealistic rigid-spring G-forces from landing cards, focusing purely on authentic touchdown sink rate and speed;
 - **Native Jundroo-Style Rounded Glass**: SDF (Signed Distance Field) pre-baked frosted glass dark panel with smooth 14px anti-aliased corners;
 - **Zero-Frame Warm-up**: Pre-bakes FreeType glyph atlases and shader passes during the first 2 loading frames, completely eliminating first-touchdown stutter.
 
-### 2. Realtime G-Force Waveform Oscilloscope (Alt + G)
+### 2. Realtime G-Force Waveform Oscilloscope (Key: [ )
 - **50Hz Physical Sampling**: Top-right corner floating scope plotting 3 seconds of continuous physical G-load;
 - **Reference Grid**: Labeled lines for `1.0G (level flight green)`, `2.0G (warning yellow)`, and `3.0G (limit red)`;
 - **Touchdown Marker**: Automatically drops a vertical red touchdown marker line upon wheel contact.
 
-### 3. X-Plane 12-Style 3D Flight Path Trajectory (Alt + P / Alt + C)
+### 3. X-Plane 12-Style 3D Flight Path Trajectory (Keys: ] / \ )
 - **Approach & Pattern Review**: Renders an in-world glowing cyan ribbon trajectory to inspect your 3° glide slope, flare curve, and traffic pattern;
-- **Extreme Performance & Zero-GC**:
-  - Driven by Unity-native `LineRenderer` and GPU Unlit shaders;
+- **Extreme Performance & Camera-Safe**:
+  - 100% lazily instantiated on demand—no global objects at spawn time, completely eliminating cockpit camera blue occlusions;
   - Adaptive distance sampling (>1.2m displacement per point) prevents vertex bloat when taxiing or stopped;
-  - Ring buffer supporting 2,400 waypoints (covers 6–10 minutes of full approach flights);
+  - Ring buffer supporting 2,000 waypoints (covers 6–10 minutes of full approach flights);
   - Zero DrawCalls and zero rendering overhead when toggled off.
 
 ---
 
-## ⌨️ Shortcut Keys (Non-Conflicting Design)
+## ⌨️ Shortcut Keys (Zero-Conflict Design)
 
-All shortcuts use **`Alt` modifier combos** to avoid conflicting with game-native F1–F12 keys and other mods. You can freely customize any single key or combination in `BepInEx/config/com.noraneko.sp2.landingrate.cfg`.
+Eliminated Windows-menu-trapping `Alt` combinations and native game keys (like `P` for pause and `G` for landing gear). Upgraded to clean, dedicated single keys on the right side of the keyboard:
 
 | Key | Description | Default State |
 | :---: | :--- | :---: |
-| **`Alt + L`** | Show / Hide the **Landing Report HUD** | Pops up upon touchdown for 7.5s |
-| **`Alt + G`** | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
-| **`Alt + P`** | Toggle X-Plane 12-style **3D Flight Path Trajectory** | Disabled by default |
-| **`Alt + C`** | **Clear and reset current flight trajectory path** | Ready anytime |
+| **`'`** (Quote) | Show / Hide the **Landing Report HUD** | Pops up upon touchdown for 7.5s |
+| **`[`** (LeftBracket) | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
+| **`]`** (RightBracket) | Toggle X-Plane 12-style **3D Flight Path Trajectory** | Disabled by default |
+| **`\`** (Backslash) | **Clear and reset current flight trajectory path** | Ready anytime |
+
+> **Customizable**: You can customize these keybindings in `SimplePlanes 2/BepInEx/config/com.noraneko.sp2.landingrate.cfg`.
 
 ---
 
