@@ -25,6 +25,12 @@ A general-purpose flight analysis and avionics telemetry plugin for **SimplePlan
 - **Reference Grid**: Labeled lines for `1.0G (level flight green)`, `2.0G (warning yellow)`, and `3.0G (limit red)`;
 - **Touchdown Marker**: Automatically drops a vertical red touchdown marker line upon wheel contact.
 
+### 3. X-Plane 12 Style 3D Flight Path (Keys: F8 / F9 )
+- **Wing Ribbon**: Procedural 3D solid mesh reflecting true bank (Roll) and climb/sink (Pitch), rendered with double-sided Quad Strips for zero backface culling;
+- **Vertical Approach Curtain**: Realtime downward Raycast to terrain generating a translucent vertical curtain with periodic high-contrast milestone ticks for realistic glideslope depth;
+- **Dynamic Vertex Color**: Color-mapped dynamically against true airspeed / ground speed (Cyan -> Green -> Yellow -> Red) with zero texture asset overhead;
+- **Floating Origin Shift Protection**: Deeply hooked into `FloatingOriginScript` with delta-jump compensation, ensuring long cross-country tracks never skew or tear.
+
 ---
 
 ## ⌨️ Shortcut Keys (Zero-Conflict Design)
@@ -34,6 +40,8 @@ Eliminated Windows-menu-trapping `Alt` combinations and native game keys (like t
 | Key | Description | Default State |
 | :---: | :--- | :---: |
 | **`F7`** | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
+| **`F8`** | Cycle **3D Flight Path Mode** (Off -> Ribbon -> Ribbon+Curtain -> SingleLine) | Enabled by default (Ribbon+Curtain) |
+| **`F9`** | Clear all recorded 3D flight trajectory points | Instant reset |
 | *Auto* | **Landing Rate Report HUD** (Sink Rate + Speed + Pitch/Roll) | Pops up automatically on touchdown for 7.5s |
 
 > **Configuration**: Customizable in `SimplePlanes 2/BepInEx/config/com.noraneko.sp2.landingrate.cfg`.
