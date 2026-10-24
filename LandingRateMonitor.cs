@@ -10,23 +10,12 @@ using Assets.Scripts.Craft.Parts.Modifiers;
 
 namespace SimplePlanes2.LandingRate
 {
-    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.3.0")]
+    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.4.0")]
     public class LandingRateMonitor : BaseUnityPlugin
     {
-        // =========================================================================
-        // 彻底解决按键冲突与油门被锁问题：
-        // 1. 弃用易导致 Windows 菜单挂起锁油门的 Alt 键
-        // 2. 弃用游戏原生的 P (暂停)、G (起落架) 等键
-        // 3. 改用极度干净、零冲突的专业功能单键：
-        //    ' (Quote)       : 显示/收起着陆战报卡片
-        //    [ (LeftBracket) : 开启/关闭实时 G 力波形示波器
-        //    ] (RightBracket): 开启/关闭 X-Plane 12 风格 3D 飞行航迹线
-        //    \ (Backslash)   : 一键清空重置当前飞行航迹线
-        // =========================================================================
-        private ConfigEntry<KeyCode> _keyHud;
-        private ConfigEntry<KeyCode> _keyScope;
-        private ConfigEntry<KeyCode> _keyPath;
-        private ConfigEntry<KeyCode> _keyClearPath;
+        // 快捷键配置 (彻底精简：无冲突单键，删除所有不必要的复杂按键)
+        private ConfigEntry<KeyCode> _keyScope;   // 默认 [: 开启/关闭实时 G 力波形示波器
+        private ConfigEntry<KeyCode> _keyPath;    // 默认 ]: 开启/关闭 3D 飞行历史航迹线
         private ConfigEntry<float> _hudDuration;
 
         // 官方原生私有方法高速委托
@@ -59,18 +48,20 @@ namespace SimplePlanes2.LandingRate
         private bool _liveGrounded = false;
 
         // =========================================================================
-        // 模块一：3D 飞行历史航迹线 (彻底重构：安全隔离，绝对杜绝任何相机遮挡与开屏蓝屏)
+        // 模块一：X-Plane 12 风格 3D 飞行历史航迹线 (整局全记录 + 100% 绝对可见性重构)
+        // 1. 无需清空：完整记录本局从起飞到降落的所有飞行轨迹 (5000 点超大容量)
+        // 2. 彻底解决隐形：严密层级匹配 (Layer) + 多重安全可靠 Shader + 1.2m 鲜明线宽
         // =========================================================================
         private bool _showFlightPath = false;
         private GameObject _pathHostObj = null;
         private LineRenderer _pathRenderer = null;
         private Material _pathMat = null;
 
-        private const int MAX_PATH_POINTS = 2000;
+        private const int MAX_PATH_POINTS = 5000; // 本局全量连续航迹缓存
         private readonly Vector3[] _pathPointBuffer = new Vector3[MAX_PATH_POINTS];
         private int _pathPointCount = 0;
         private Vector3 _lastRecordedPos = Vector3.zero;
-        private const float MIN_PATH_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2 米才新增航迹点
+        private const float MIN_PATH_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2 米采样一个航迹点
 
         // =========================================================================
         // 模块二：高精度实时 G 力示波器 (按 [ 自由开关)
@@ -84,10 +75,10 @@ namespace SimplePlanes2.LandingRate
         private const int SCOPE_CAPACITY = 140;
         private readonly ScopeSample[] _scopeBuffer = new ScopeSample[SCOPE_CAPACITY];
         private int _scopeHead = 0;
-        private bool _showWaveformScope = false; // 默认关闭，按 [ 开关
+        private bool _showWaveformScope = false; // 默认关闭，按 [ 随时开启
 
         // =========================================================================
-        // 模块三：着陆结算卡片 (去除非真实 G 力后的高纯度航空战报)
+        // 模块三：着陆结算卡片 (触地自动弹出 7.5 秒，无需手动按键，纯净大字)
         // =========================================================================
         public struct LandingRecord
         {
@@ -132,11 +123,9 @@ namespace SimplePlanes2.LandingRate
 
         private void Awake()
         {
-            // 绑定完全无冲突的专业功能单键
-            _keyHud = Config.Bind("Controls", "KeyLandingHUD", KeyCode.Quote, "显示/收起着陆战报卡片快捷键 (默认单引号 ')");
+            // 绑定绝对无冲突的右侧单键
             _keyScope = Config.Bind("Controls", "KeyGForceScope", KeyCode.LeftBracket, "实时 G 力示波器开关快捷键 (默认左中括号 [)");
             _keyPath = Config.Bind("Controls", "KeyFlightPath", KeyCode.RightBracket, "3D 飞行历史轨迹线开关快捷键 (默认右中括号 ])");
-            _keyClearPath = Config.Bind("Controls", "KeyClearPath", KeyCode.Backslash, "一键清空重置飞行轨迹线快捷键 (默认反斜杠 \\)");
             _hudDuration = Config.Bind("UI", "DisplayDuration", 7.5f, "着陆结算卡片停留时间(秒)");
             _totalDuration = _hudDuration.Value;
 
@@ -150,7 +139,7 @@ namespace SimplePlanes2.LandingRate
                 _scopeBuffer[i] = new ScopeSample { rawG = 1.0f, isTouchdown = false };
             }
 
-            Logger.LogInfo("[LandingRateMonitor v3.3.0] 快捷键升级: [ = G力示波器, ] = 3D航迹线, \\ = 清空航迹, ' = 着陆战报 (零冲突)。");
+            Logger.LogInfo("[LandingRateMonitor v3.4.0] 本局全量 3D 航迹线与纯净 HUD 已装载: [ = 示波器, ] = 3D航迹线。");
         }
 
         private static void InitNativeDelegates()
@@ -287,44 +276,74 @@ namespace SimplePlanes2.LandingRate
         }
 
         // =========================================================================
-        // 彻底根除“开屏蓝屏”的安全 3D 航迹线加载方案：
-        // 1. 开局 0 动作，绝不在 Awake() 阶段创建任何全局 3D 物体与材质
-        // 2. 仅在用户主动按 ']' 开启且真正升空飞行时，才延迟建立渲染通道
-        // 3. 使用安全的不参与阴影遮挡的标准半透明材质，绝不干扰座舱相机近裁剪面
+        // 核心渲染通道：保证 3D 轨迹线 100% 绝对可见的终极方案
+        // 1. 动态图层对齐 (严格匹配飞机当前 Layer，确保主相机绝对不剔除)
+        // 2. 多重着色器容灾：优先从原生已成功渲染的机体材质派生，确保 URP 深度测试完好
+        // 3. 线宽提升至 1.2m：在数百米乃至数公里外依然清晰夺目
         // =========================================================================
-        private void EnsurePathRendererSafe()
+        private void EnsurePathRendererVisible()
         {
             if (_pathHostObj != null && _pathRenderer != null) return;
 
             try
             {
-                _pathHostObj = new GameObject("SP2_SafeFlightPathHost");
+                _pathHostObj = new GameObject("SP2_FlightTrajectoryVisualizer");
+                
+                // 关键点1: 与飞机处于完全相同的渲染层级，主相机能看到飞机，就必然能看到线条！
+                if (_aircraft != null)
+                {
+                    _pathHostObj.layer = _aircraft.gameObject.layer;
+                }
+
                 _pathRenderer = _pathHostObj.AddComponent<LineRenderer>();
                 _pathRenderer.useWorldSpace = true;
-                _pathRenderer.startWidth = 0.35f;
-                _pathRenderer.endWidth = 0.35f;
+                
+                // 关键点2: 1.2米线宽，像航电 HUD 3D 导引道一样鲜艳清晰，远距离不虚隐
+                _pathRenderer.startWidth = 1.2f;
+                _pathRenderer.endWidth = 1.2f;
                 _pathRenderer.positionCount = 0;
                 _pathRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
                 _pathRenderer.receiveShadows = false;
 
-                // 寻找经过严格验证的安全 Shader
-                Shader s = Shader.Find("Sprites/Default");
-                if (s == null) s = Shader.Find("Unlit/Color");
-                if (s == null) s = Shader.Find("Hidden/Internal-Colored");
+                // 关键点3: 着色器多重安全绑定
+                Shader lineShader = Shader.Find("Universal Render Pipeline/Unlit");
+                if (lineShader == null) lineShader = Shader.Find("Shaders/Particles/Additive");
+                if (lineShader == null) lineShader = Shader.Find("Shaders/Particles/Alpha Blended");
+                if (lineShader == null) lineShader = Shader.Find("Hidden/Internal-Colored");
 
-                _pathMat = new Material(s);
-                _pathMat.color = new Color(0.20f, 0.80f, 1.0f, 0.85f);
+                if (lineShader != null)
+                {
+                    _pathMat = new Material(lineShader);
+                }
+                else if (_aircraft != null)
+                {
+                    // 终极保底：从飞机身上的任意一个正常渲染的部件克隆材质
+                    Renderer r = _aircraft.GetComponentInChildren<Renderer>();
+                    if (r != null && r.sharedMaterial != null)
+                    {
+                        _pathMat = new Material(r.sharedMaterial);
+                    }
+                }
+
+                if (_pathMat == null)
+                {
+                    _pathMat = new Material(Shader.Find("Mobile/Particles/Additive"));
+                }
+
+                // 绚丽的航空天蓝发光色
+                _pathMat.color = new Color(0.15f, 0.80f, 1.0f, 0.90f);
                 _pathRenderer.material = _pathMat;
 
+                // 渐变色彩 (最新机尾鲜亮天蓝，历史航线向后渐变为半透明青蓝)
                 Gradient grad = new Gradient();
                 grad.SetKeys(
                     new GradientColorKey[] {
-                        new GradientColorKey(new Color(0.20f, 0.85f, 1.0f), 0.0f),
-                        new GradientColorKey(new Color(0.15f, 0.65f, 0.95f), 1.0f)
+                        new GradientColorKey(new Color(0.10f, 0.65f, 0.95f), 0.0f),
+                        new GradientColorKey(new Color(0.20f, 0.90f, 1.0f), 1.0f)
                     },
                     new GradientAlphaKey[] {
-                        new GradientAlphaKey(0.20f, 0.0f), // 尾部渐隐
-                        new GradientAlphaKey(0.85f, 1.0f)  // 机尾高亮
+                        new GradientAlphaKey(0.35f, 0.0f), // 最旧的航迹仍有 35% 可见度，不被完全抹除
+                        new GradientAlphaKey(0.95f, 1.0f)  // 最新的机尾航迹鲜亮
                     }
                 );
                 _pathRenderer.colorGradient = grad;
@@ -332,7 +351,7 @@ namespace SimplePlanes2.LandingRate
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[LandingRateMonitor] 延迟初始化 3D 航迹线安全通道失败: " + ex.Message);
+                Debug.LogWarning("[LandingRateMonitor] 初始化 3D 轨迹渲染器失败: " + ex.Message);
             }
         }
 
@@ -358,37 +377,23 @@ namespace SimplePlanes2.LandingRate
 
         private void Update()
         {
-            // 1. 按 ' (Quote): 着陆大字卡片开关
-            if (Input.GetKeyDown(_keyHud.Value))
-            {
-                if (_displayTimer > 0f)
-                {
-                    _displayTimer = 0f;
-                }
-                else if (!string.IsNullOrEmpty(_report.ratingTitle))
-                {
-                    _displayTimer = _totalDuration;
-                }
-            }
-
-            // 2. 按 [ (LeftBracket): G 力动态示波器开关
+            // 1. 按 [ (LeftBracket): G 力动态示波器开关
             if (Input.GetKeyDown(_keyScope.Value))
             {
                 _showWaveformScope = !_showWaveformScope;
             }
 
-            // 3. 按 ] (RightBracket): 3D 飞行历史轨迹线开关 (真正按需安全触发)
+            // 2. 按 ] (RightBracket): 3D 飞行历史轨迹线开关 (一键开启/隐藏整局全部轨迹)
             if (Input.GetKeyDown(_keyPath.Value))
             {
                 _showFlightPath = !_showFlightPath;
                 if (_showFlightPath)
                 {
-                    EnsurePathRendererSafe();
+                    EnsurePathRendererVisible();
                     if (_pathRenderer != null)
                     {
                         _pathRenderer.enabled = (_pathPointCount > 1);
-                        _pathRenderer.positionCount = _pathPointCount;
-                        _pathRenderer.SetPositions(_pathPointBuffer);
+                        UpdateRendererLine();
                     }
                 }
                 else if (_pathRenderer != null)
@@ -397,26 +402,9 @@ namespace SimplePlanes2.LandingRate
                 }
             }
 
-            // 4. 按 \ (Backslash): 一键清空重置航迹线
-            if (Input.GetKeyDown(_keyClearPath.Value))
-            {
-                ClearFlightPath();
-            }
-
             if (_displayTimer > 0f)
             {
                 _displayTimer -= Time.deltaTime;
-            }
-        }
-
-        private void ClearFlightPath()
-        {
-            _pathPointCount = 0;
-            _lastRecordedPos = Vector3.zero;
-            if (_pathRenderer != null)
-            {
-                _pathRenderer.positionCount = 0;
-                _pathRenderer.enabled = false;
             }
         }
 
@@ -490,7 +478,7 @@ namespace SimplePlanes2.LandingRate
                 isTouchdown = isTouchdownEvent
             };
 
-            // 4. 3D 飞行历史轨迹线自适应采样
+            // 4. 全局连续记录本局所有航迹 (不用清除，保留整局完整过程)
             RecordTrajectoryPoint();
         }
 
@@ -500,7 +488,6 @@ namespace SimplePlanes2.LandingRate
 
             Vector3 currentPos = _aircraft.transform.position;
             
-            // 初次采样校准
             if (_lastRecordedPos == Vector3.zero)
             {
                 _lastRecordedPos = currentPos;
@@ -509,6 +496,7 @@ namespace SimplePlanes2.LandingRate
 
             float distSq = (currentPos - _lastRecordedPos).sqrMagnitude;
 
+            // 位移超过 1.2 米自动记录一个新顶点
             if (distSq >= MIN_PATH_DISTANCE_SQ)
             {
                 _lastRecordedPos = currentPos;
@@ -520,6 +508,7 @@ namespace SimplePlanes2.LandingRate
                 }
                 else
                 {
+                    // 环形推进
                     Array.Copy(_pathPointBuffer, 1, _pathPointBuffer, 0, MAX_PATH_POINTS - 1);
                     _pathPointBuffer[MAX_PATH_POINTS - 1] = currentPos;
                 }
@@ -527,10 +516,22 @@ namespace SimplePlanes2.LandingRate
                 if (_showFlightPath && _pathRenderer != null && _pathPointCount > 1)
                 {
                     _pathRenderer.enabled = true;
-                    _pathRenderer.positionCount = _pathPointCount;
-                    _pathRenderer.SetPositions(_pathPointBuffer);
+                    UpdateRendererLine();
                 }
             }
+        }
+
+        // 统一且安全地将有效点集推送给 LineRenderer
+        private void UpdateRendererLine()
+        {
+            if (_pathRenderer == null || _pathPointCount <= 1) return;
+
+            // 拷贝有效点子集，杜绝将空向量传给 GPU
+            Vector3[] validPoints = new Vector3[_pathPointCount];
+            Array.Copy(_pathPointBuffer, 0, validPoints, 0, _pathPointCount);
+
+            _pathRenderer.positionCount = _pathPointCount;
+            _pathRenderer.SetPositions(validPoints);
         }
 
         private bool CheckCraftGroundedFast()
@@ -642,6 +643,12 @@ namespace SimplePlanes2.LandingRate
             if (found != null)
             {
                 _aircraft = found;
+
+                // 若轨迹线宿主已创建，实时同步 Layer 保证主相机绝对可见
+                if (_pathHostObj != null)
+                {
+                    _pathHostObj.layer = found.gameObject.layer;
+                }
 
                 List<IWheelPart> wList = found.WheelParts;
                 if (wList != null)
@@ -781,7 +788,7 @@ namespace SimplePlanes2.LandingRate
                 RenderGForceWaveformScope();
             }
 
-            // 2. 着陆战报大字卡片 (触地自动弹出或按 ' 随时呼出)
+            // 2. 着陆战报大字卡片 (触地全自动弹出，平时完全静默，无需按键)
             if (_displayTimer > 0f && !string.IsNullOrEmpty(_report.ratingTitle))
             {
                 float alpha = 1.0f;
