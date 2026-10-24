@@ -4,7 +4,7 @@
 [![BepInEx](https://img.shields.io/badge/BepInEx-5.4-green.svg)](https://github.com/BepInEx/BepInEx)
 [![Release](https://img.shields.io/github/v/release/NoraNekowww/SimplePlanes2-FlightAnalyzer)](https://github.com/NoraNekowww/SimplePlanes2-FlightAnalyzer/releases)
 
-适用于 **SimplePlanes 2** 的通用飞行分析与航电辅助插件（基于 BepInEx 5 构建）。提供专业纯净的着陆参数战报、高频实时动态 G 力示波器，以及对标 **X-Plane 12** 的**程序化三维四边形航迹网格（Procedural 3D Ribbon Mesh）**。
+适用于 **SimplePlanes 2** 的通用飞行分析与航电辅助插件（基于 BepInEx 5 构建）。提供专业纯净的着陆参数战报、高频实时动态 G 力示波器，以及对标 **X-Plane 12** 的**游戏原生 Shapes 矢量三维抗锯齿飞行历史航迹线（Shapes 3D Polyline）**。
 
 [English Documentation](README.en.md)
 
@@ -25,17 +25,17 @@
 - **标准标尺网格**：清晰标注 `1.0G (平飞亮绿线)`、`2.0G (黄色警戒线)`、`3.0G (红色极限线)`；
 - **触地垂线标记**：接地瞬间在曲线上自动打下一根垂直红色标记线，起落架受压冲击波形一目了然。
 
-### 3. X-Plane 12 风格 3D 飞行历史航迹带（快捷键 ] ）
-- **真正参与 3D 空间光栅化**：
-  - 彻底淘汰不可靠的 `LineRenderer`，改用底层的 **程序化多边形网格（Procedural 3D Ribbon Mesh）**；
-  - 与地景、跑道、飞机机身走相同的顶点着色、几何光栅化与硬件 Z-Buffer 深度测试，无论在任何视角下都绝对真实可见；
-  - 动态图层（Layer）与飞机关联，彻底根除相机剔除与近裁剪面穿透导致的开屏蓝屏问题；
+### 3. X-Plane 12 风格 3D 飞行历史航迹线（快捷键 ] ）
+- **为什么此前无论哪种方法都不可见？**
+  - **Unity 6 URP 定制管线壁垒**：SimplePlanes 2 采用 Unity 6 URP 独立发布，主相机的 `UniversalRendererData` 被严格锁死，且开启了着色器打包剔除（Shader Stripping）。任何外部新建材质或 Standard/Unlit 着色器均无合法 Render Pass；
+  - **底层原生突破**：经深度逆向游戏引擎程序集，确认 SP2 官方原生整合了著名专业矢量渲染管线 **`Shapes`**（`ShapesRuntime.dll`），且专门配置了 `ShapesRenderPass` 注入相机管线；
+  - **原生 Shapes.Polyline**：直接调用游戏自身的 `Shapes.Polyline` 矢量线系统，与地景、跑道、飞机机身在同一个底层 Pass 真正完成几何光栅化与硬件 Z-Buffer 深度测试，抗锯齿纯线状质感，彻底根除隐形与穿透问题！
 - **整局全量航迹（免清除设计）**：
-  - 航迹缓冲池扩容至 **5000 个航迹截面点**（支持长达 6~10 分钟整局航线）；
+  - 航迹缓冲池容纳 **4000 个精细航迹节点**；
   - 完整记录起飞滑跑、爬升转弯、五边进近下滑道到接地拉平的全套立体航迹线；
 - **自适应空间采样与 0 内存开销**：
-  - 空间位移 > 1.2 米自动延伸航迹截面，地面静止或慢滑绝不堆叠重复多边形；
-  - 航迹带总宽 1.0 米，支持双面光栅化，近大远小清晰夺目。
+  - 空间位移 > 1.2 米自动延伸航迹线，地面静止或慢滑绝不堆叠重复点位；
+  - 线宽 0.35 米矢量粗细，支持平滑圆弧过渡拐角与各向同性立体观察。
 
 ---
 
@@ -46,7 +46,7 @@
 | 快捷键 | 功能说明 | 默认状态 |
 | :---: | :--- | :---: |
 | **`[`** (左中括号) | 开启 / 关闭屏幕右上角**实时 G 力波形示波器** | 默认关闭，单键随时开关 |
-| **`]`** (右中括号) | 开启 / 关闭 X-Plane 12 风格 **3D 飞行历史航迹带** | 默认关闭，一键展开整局航迹 |
+| **`]`** (右中括号) | 开启 / 关闭 X-Plane 12 风格 **3D 飞行历史航迹线** | 默认关闭，一键展开整局航迹 |
 
 > **自由改键**：你可以在 `SimplePlanes 2/BepInEx/config/com.noraneko.sp2.landingrate.cfg` 配置文件中随意将按键修改为你习惯的任意单键或手柄按键。
 

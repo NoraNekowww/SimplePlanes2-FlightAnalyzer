@@ -4,7 +4,7 @@
 [![BepInEx](https://img.shields.io/badge/BepInEx-5.4-green.svg)](https://github.com/BepInEx/BepInEx)
 [![Release](https://img.shields.io/github/v/release/NoraNekowww/SimplePlanes2-FlightAnalyzer)](https://github.com/NoraNekowww/SimplePlanes2-FlightAnalyzer/releases)
 
-A general-purpose flight analysis and avionics telemetry plugin for **SimplePlanes 2** (powered by BepInEx 5 Mono x64). Features high-clarity landing rate reports, a realtime G-force waveform oscilloscope, and **X-Plane 12-style procedural 3D ribbon mesh** flight trajectory visualization.
+A general-purpose flight analysis and avionics telemetry plugin for **SimplePlanes 2** (powered by BepInEx 5 Mono x64). Features high-clarity landing rate reports, a realtime G-force waveform oscilloscope, and **game-native Shapes 3D anti-aliased vector trajectory lines** (X-Plane 12-style wireline).
 
 [中文文档 (Chinese)](README.md)
 
@@ -25,17 +25,17 @@ A general-purpose flight analysis and avionics telemetry plugin for **SimplePlan
 - **Reference Grid**: Labeled lines for `1.0G (level flight green)`, `2.0G (warning yellow)`, and `3.0G (limit red)`;
 - **Touchdown Marker**: Automatically drops a vertical red touchdown marker line upon wheel contact.
 
-### 3. X-Plane 12-Style Procedural 3D Ribbon Mesh (Key: ] )
-- **True Engine-Level 3D Rasterization**:
-  - Completely replaced unreliable LineRenderers with native **Procedural 3D Ribbon Meshes** (`MeshFilter` + `MeshRenderer`);
-  - Shares the exact same vertex/fragment shader passes and hardware Z-buffer depth testing as terrain, runways, and aircraft;
-  - Double-sided rasterization ensures complete visibility from any cockpit FPV or external chase angle;
+### 3. X-Plane 12-Style Shapes 3D Vector Flight Trajectory (Key: ] )
+- **Root Cause of Previous Invisibility**:
+  - SimplePlanes 2 runs on Unity 6 with a strictly locked URP (`UniversalRendererData`). Independent release builds strip out unreferenced shaders, and any newly instantiated materials without registered URP Passes are dropped by the GPU renderer;
+  - Deep inspection of the game engine assemblies revealed that SP2 natively integrates the renowned vector rendering package **`Shapes`** (`ShapesRuntime.dll`), with a registered `ShapesRenderPass` hooked into the main camera's render pipeline;
+  - **Native Shapes.Polyline Integration**: Directly utilizes the game's own `Shapes.Polyline` component, rendering crisp, anti-aliased, 3D wireframe trajectory lines with proper depth testing and zero camera-culling issues.
 - **Full-Session Continuous Recording**:
-  - Stores up to **5,000 waypoint sections** (covers 6–10 minutes of entire flights without any clearing required);
+  - Stores up to **4,000 waypoint nodes** (covers the entire flight session without needing any manual reset);
   - Seamlessly records takeoff, climb, traffic patterns, 3° approach glideslope, and flare touchdown;
 - **Adaptive Distance Sampling & Zero-GC**:
-  - Adds waypoints only when displacement > 1.2m, preventing redundant polygon accumulation;
-  - 1.0-meter wide ribbon band for crystal-clear readability at any altitude or distance.
+  - Adds waypoints only when displacement > 1.2m, preventing redundant point accumulation while taxiing;
+  - 0.35m vector thickness with round joint smoothing, providing high-precision trajectory aesthetics from any cockpit or external view.
 
 ---
 
@@ -46,7 +46,7 @@ Eliminated Windows-menu-trapping `Alt` combinations and native game keys (like `
 | Key | Description | Default State |
 | :---: | :--- | :---: |
 | **`[`** (LeftBracket) | Toggle Realtime **G-Force Waveform Scope** | Disabled by default |
-| **`]`** (RightBracket) | Toggle X-Plane 12-style **Procedural 3D Ribbon Mesh** | Disabled by default |
+| **`]`** (RightBracket) | Toggle X-Plane 12-style **Shapes 3D Vector Trajectory Line** | Disabled by default |
 
 > **Customizable**: You can customize these keybindings in `SimplePlanes 2/BepInEx/config/com.noraneko.sp2.landingrate.cfg`.
 

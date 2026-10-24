@@ -52,6 +52,7 @@ $refUnityIMGUI = Join-Path $managed "UnityEngine.IMGUIModule.dll"
 $refUnityPhysics = Join-Path $managed "UnityEngine.PhysicsModule.dll"
 $refUnityInput = Join-Path $managed "UnityEngine.InputLegacyModule.dll"
 $refUnityText = Join-Path $managed "UnityEngine.TextRenderingModule.dll"
+$refShapes = Join-Path $managed "ShapesRuntime.dll"
 
 $cmdArgs = @(
     "/noconfig",
@@ -73,10 +74,11 @@ $cmdArgs = @(
     "/reference:$refUnityPhysics",
     "/reference:$refUnityInput",
     "/reference:$refUnityText",
+    "/reference:$refShapes",
     $source
 )
 
-Write-Host "Compiling LandingRateMonitor.dll..."
+Write-Host "Compiling LandingRateMonitor.dll with native Shapes vector engine..."
 & $csc $cmdArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Compilation failed with exit code $LASTEXITCODE"
