@@ -11,10 +11,10 @@ using Assets.Scripts.Craft.Parts.Modifiers;
 
 namespace SimplePlanes2.LandingRate
 {
-    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.1.0")]
+    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "3.2.0")]
     public class LandingRateMonitor : BaseUnityPlugin
     {
-        // 快捷键配置 (使用 BepInEx 原生 KeyboardShortcut，默认使用 Alt 组合键，彻底杜绝单键与游戏功能冲突)
+        // 快捷键配置
         private ConfigEntry<KeyboardShortcut> _shortcutHud;     // 默认 Alt + L: 着陆战报卡片
         private ConfigEntry<KeyboardShortcut> _shortcutScope;   // 默认 Alt + G: G力动态示波器
         private ConfigEntry<KeyboardShortcut> _shortcutPath;    // 默认 Alt + P: 3D历史航迹线
@@ -51,22 +51,20 @@ namespace SimplePlanes2.LandingRate
         private bool _liveGrounded = false;
 
         // =========================================================================
-        // 模块一：X-Plane 12 风格 3D 飞行历史轨迹线 (Flight Path Trajectory)
-        // 采用极致优化的 LineRenderer，环形点缓冲，距离自适应采样，0 GC 垃圾回收
+        // 模块一：X-Plane 12 风格 3D 飞行历史轨迹线 (100% 延迟按需安全创建，绝不在开局污染相机)
         // =========================================================================
         private bool _showFlightPath = false;
-        private GameObject _pathLineObj;
-        private LineRenderer _pathLineRenderer;
-        private Material _pathLineMaterial;
+        private GameObject _pathLineObj = null;
+        private LineRenderer _pathLineRenderer = null;
 
-        private const int MAX_PATH_POINTS = 2400; // 最多保留 2400 个航迹点 (约可记录 6~10 分钟完整航线)
+        private const int MAX_PATH_POINTS = 2000;
         private readonly Vector3[] _pathPointBuffer = new Vector3[MAX_PATH_POINTS];
         private int _pathPointCount = 0;
         private Vector3 _lastRecordedPos;
-        private const float MIN_PATH_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2 米才新增一个航迹点
+        private const float MIN_PATH_DISTANCE_SQ = 1.44f; // 空间位移 > 1.2 米才新增航迹点
 
         // =========================================================================
-        // 模块二：高精度实时 G 力示波器 (Realtime G-Force Waveform Scope)
+        // 模块二：高精度实时 G 力示波器 (默认关闭，按 Alt+G 安全开启)
         // =========================================================================
         public struct ScopeSample
         {
@@ -77,7 +75,7 @@ namespace SimplePlanes2.LandingRate
         private const int SCOPE_CAPACITY = 140;
         private readonly ScopeSample[] _scopeBuffer = new ScopeSample[SCOPE_CAPACITY];
         private int _scopeHead = 0;
-        private bool _showWaveformScope = false; // 按 Alt+G 可开关
+        private bool _showWaveformScope = false; // 默认关闭，按 Alt+G 开关
 
         // =========================================================================
         // 模块三：着陆结算卡片 (去除非真实 G 力后的高纯度航空战报)
@@ -93,7 +91,6 @@ namespace SimplePlanes2.LandingRate
             public string ratingTitle;
             public Color accentColor;
 
-            // 超大字与副标字符串
             public string strFpmMain;
             public string strFpmSub;
             public string strSpeedMain;
@@ -105,7 +102,7 @@ namespace SimplePlanes2.LandingRate
         private float _displayTimer = 0f;
         private float _totalDuration = 7.5f;
 
-        // 静默预热控制
+        // 静默预热控制 (开局安全保护)
         private int _warmupFramesLeft = 2;
 
         // UI 资源
@@ -126,7 +123,6 @@ namespace SimplePlanes2.LandingRate
 
         private void Awake()
         {
-            // 采用 Alt 组合键，并在 BepInEx 配置中生成人性化提示，支持用户任意自定义
             _shortcutHud = Config.Bind("Shortcuts", "ShortcutLandingHUD", new KeyboardShortcut(KeyCode.L, KeyCode.LeftAlt), "呼出/关闭着陆战报卡片快捷键 (默认 Alt+L)");
             _shortcutScope = Config.Bind("Shortcuts", "ShortcutGForceScope", new KeyboardShortcut(KeyCode.G, KeyCode.LeftAlt), "实时 G 力示波器开关快捷键 (默认 Alt+G)");
             _shortcutPath = Config.Bind("Shortcuts", "ShortcutFlightPath", new KeyboardShortcut(KeyCode.P, KeyCode.LeftAlt), "3D 飞行历史轨迹线开关快捷键 (默认 Alt+P)");
@@ -137,7 +133,6 @@ namespace SimplePlanes2.LandingRate
 
             InitNativeDelegates();
             PrebakeUIAssets();
-            InitFlightPathRenderer();
             PrecompileJIT();
 
             // 初始化示波器缓冲
@@ -146,7 +141,7 @@ namespace SimplePlanes2.LandingRate
                 _scopeBuffer[i] = new ScopeSample { rawG = 1.0f, isTouchdown = false };
             }
 
-            Logger.LogInfo("[LandingRateMonitor v3.1.0] 快捷键已绑定: Alt+L=着陆卡片, Alt+G=G力示波器, Alt+P=3D航迹线, Alt+C=清空航迹 (支持在 config 中自由修改)。");
+            Logger.LogInfo("[LandingRateMonitor v3.2.0] 安全加固版已就绪: 3D 轨迹线完全按需懒加载，全屏色彩与 NaN 严格隔离。");
         }
 
         private static void InitNativeDelegates()
@@ -282,29 +277,31 @@ namespace SimplePlanes2.LandingRate
             _scopeLegendStyle.alignment = TextAnchor.MiddleRight;
         }
 
-        private void InitFlightPathRenderer()
+        // =========================================================================
+        // 核心安全优化：3D 航迹线仅在用户真正按下 Alt+P 时才创建，绝不在开局生成
+        // 彻底杜绝全局 (0,0,0) GameObject 与未初始化着色器污染相机渲染管线导致屏幕全蓝！
+        // =========================================================================
+        private void EnsureFlightPathRenderer()
         {
             if (_pathLineObj != null) return;
 
             try
             {
                 _pathLineObj = new GameObject("SP2_FlightPathTrajectory");
-                DontDestroyOnLoad(_pathLineObj);
-
                 _pathLineRenderer = _pathLineObj.AddComponent<LineRenderer>();
                 _pathLineRenderer.useWorldSpace = true;
                 _pathLineRenderer.startWidth = 0.35f;
                 _pathLineRenderer.endWidth = 0.35f;
                 _pathLineRenderer.positionCount = 0;
 
-                Shader lineShader = Shader.Find("Universal Render Pipeline/Unlit");
-                if (lineShader == null) lineShader = Shader.Find("Sprites/Default");
+                // 寻找经过验证的标准 Shader
+                Shader lineShader = Shader.Find("Sprites/Default");
+                if (lineShader == null) lineShader = Shader.Find("Universal Render Pipeline/Unlit");
                 if (lineShader == null) lineShader = Shader.Find("Hidden/Internal-Colored");
 
-                _pathLineMaterial = new Material(lineShader);
-                _pathLineMaterial.color = new Color(0.20f, 0.75f, 1.0f, 0.85f); // 航空天蓝荧光轨迹
-
-                _pathLineRenderer.material = _pathLineMaterial;
+                Material mat = new Material(lineShader);
+                mat.color = new Color(0.20f, 0.75f, 1.0f, 0.85f);
+                _pathLineRenderer.material = mat;
 
                 Gradient grad = new Gradient();
                 grad.SetKeys(
@@ -313,16 +310,16 @@ namespace SimplePlanes2.LandingRate
                         new GradientColorKey(new Color(0.15f, 0.65f, 0.95f), 1.0f)
                     },
                     new GradientAlphaKey[] {
-                        new GradientAlphaKey(0.20f, 0.0f), // 尾部渐隐
-                        new GradientAlphaKey(0.85f, 1.0f)  // 机尾高亮
+                        new GradientAlphaKey(0.20f, 0.0f),
+                        new GradientAlphaKey(0.85f, 1.0f)
                     }
                 );
                 _pathLineRenderer.colorGradient = grad;
-                _pathLineRenderer.enabled = false;
+                _pathLineRenderer.enabled = true;
             }
             catch (Exception ex)
             {
-                Debug.LogWarning("[LandingRateMonitor] 初始化 3D 航迹线渲染器失败: " + ex.Message);
+                Debug.LogWarning("[LandingRateMonitor] 动态创建航迹线失败: " + ex.Message);
             }
         }
 
@@ -367,13 +364,23 @@ namespace SimplePlanes2.LandingRate
                 _showWaveformScope = !_showWaveformScope;
             }
 
-            // 3. Alt+P: 3D 飞行历史轨迹线开关
+            // 3. Alt+P: 3D 飞行历史轨迹线开关 (真正按需触发)
             if (_shortcutPath.Value.IsDown())
             {
                 _showFlightPath = !_showFlightPath;
-                if (_pathLineRenderer != null)
+                if (_showFlightPath)
                 {
-                    _pathLineRenderer.enabled = _showFlightPath && _pathPointCount > 1;
+                    EnsureFlightPathRenderer();
+                    if (_pathLineRenderer != null)
+                    {
+                        _pathLineRenderer.enabled = true;
+                        _pathLineRenderer.positionCount = _pathPointCount;
+                        _pathLineRenderer.SetPositions(_pathPointBuffer);
+                    }
+                }
+                else if (_pathLineRenderer != null)
+                {
+                    _pathLineRenderer.enabled = false;
                 }
             }
 
@@ -424,7 +431,11 @@ namespace SimplePlanes2.LandingRate
             bool isGrounded = CheckCraftGroundedFast();
 
             _liveNativeVertG = _nativeGetVerticalG != null ? _nativeGetVerticalG(_aircraft) : 1.0f;
+            if (float.IsNaN(_liveNativeVertG) || float.IsInfinity(_liveNativeVertG)) _liveNativeVertG = 1.0f;
+
             _liveNativeGForce = _nativeGetGForce != null ? _nativeGetGForce(_aircraft) : 1.0f;
+            if (float.IsNaN(_liveNativeGForce) || float.IsInfinity(_liveNativeGForce)) _liveNativeGForce = 1.0f;
+
             _liveFpm = currentDownFpm;
             _liveAgl = agl;
             _liveGrounded = isGrounded;
@@ -642,14 +653,10 @@ namespace SimplePlanes2.LandingRate
             GUI.Box(offscreen, GUIContent.none, _cardBgStyle);
             GUI.Box(offscreen, GUIContent.none, _accentBadgeStyle);
             GUI.DrawTexture(offscreen, _pixelWhite);
-            GUI.DrawTexture(offscreen, _scopeBgTex);
 
             GUI.color = oldColor;
         }
 
-        // =========================================================================
-        // 渲染实时 G 力动态变化示波器 (Alt+G 开关)
-        // =========================================================================
         private void RenderGForceWaveformScope()
         {
             int scopeW = 290;
@@ -657,6 +664,10 @@ namespace SimplePlanes2.LandingRate
             int scopeX = Screen.width - scopeW - 20;
             int scopeY = 25;
 
+            Color origColor = GUI.color;
+
+            // 1. 示波器底板
+            GUI.color = Color.white;
             GUI.DrawTexture(new Rect(scopeX, scopeY, scopeW, scopeH), _scopeBgTex);
 
             DrawShadowLabel(new Rect(scopeX + 10, scopeY + 6, 140, 16),
@@ -709,7 +720,10 @@ namespace SimplePlanes2.LandingRate
                     GUI.DrawTexture(new Rect(xPos, plotY, 2, plotH), _pixelWhite);
                 }
 
-                float clampedG = Mathf.Clamp(s.rawG, 0f, 3.0f);
+                // 严密 NaN / Infinity 检查，彻底杜绝破坏 GUI 正交矩阵导致全屏变色
+                float val = s.rawG;
+                if (float.IsNaN(val) || float.IsInfinity(val)) val = 1.0f;
+                float clampedG = Mathf.Clamp(val, 0f, 3.0f);
                 float barY = plotY + plotH * (1f - clampedG / 3.0f);
 
                 Color col;
@@ -724,7 +738,7 @@ namespace SimplePlanes2.LandingRate
                 GUI.DrawTexture(new Rect(xPos, barY - 1, 2, 2), _pixelWhite);
             }
 
-            GUI.color = Color.white;
+            GUI.color = origColor;
         }
 
         private void OnGUI()
@@ -736,13 +750,15 @@ namespace SimplePlanes2.LandingRate
                 return;
             }
 
-            // 1. 实时 G 力示波器 (按 Alt+G 开关)
+            Color rootColor = GUI.color;
+
+            // 1. 实时 G 力示波器 (按 Alt+G 开关，默认关闭)
             if (_showWaveformScope && _aircraft != null)
             {
                 RenderGForceWaveformScope();
             }
 
-            // 2. 着陆瞬间居中弹出的战报大字卡片 (按 Alt+L 开关)
+            // 2. 着陆战报大字卡片 (仅在落地或按 Alt+L 显现，平时 0 渲染)
             if (_displayTimer > 0f && !string.IsNullOrEmpty(_report.ratingTitle))
             {
                 float alpha = 1.0f;
@@ -755,7 +771,6 @@ namespace SimplePlanes2.LandingRate
                     alpha = Mathf.Clamp01((_totalDuration - _displayTimer) / 0.25f);
                 }
 
-                Color prevGuiColor = GUI.color;
                 GUI.color = new Color(1f, 1f, 1f, alpha);
 
                 int cardW = 340;
@@ -768,7 +783,7 @@ namespace SimplePlanes2.LandingRate
                 // 1. 磨砂深蓝灰抗锯齿圆角底板 (9-Slice)
                 GUI.Box(cardRect, GUIContent.none, _cardBgStyle);
 
-                // 2. 顶栏：居中评级徽标胶囊 (随评级动态变色)
+                // 2. 顶栏：居中评级徽标胶囊
                 int badgeW = 150;
                 int badgeH = 22;
                 int badgeX = cardX + (cardW - badgeW) / 2;
@@ -780,18 +795,18 @@ namespace SimplePlanes2.LandingRate
                 GUI.color = new Color(1f, 1f, 1f, alpha);
                 DrawShadowLabel(new Rect(badgeX, badgeY, badgeW, badgeH), _report.ratingTitle, _badgeTextStyle, _report.accentColor);
 
-                // 3. 核心双焦点数据排布区 (超大字突出重点)
+                // 3. 核心双焦点数据排布区
                 int contentY = cardY + 38;
                 int colW = (cardW - 36) / 2;
                 int col1X = cardX + 18;
                 int col2X = col1X + colW + 8;
 
-                // --- 左焦点：下沉率 (TOUCHDOWN SINK) ---
+                // --- 左焦点：下沉率 ---
                 DrawShadowLabel(new Rect(col1X, contentY, colW, 14), "SINK RATE", _fieldLabelStyle, new Color(0.60f, 0.70f, 0.85f));
                 DrawShadowLabel(new Rect(col1X, contentY + 12, colW - 38, 38), _report.strFpmMain, _bigNumberStyle, _report.accentColor);
                 DrawShadowLabel(new Rect(col1X + colW - 36, contentY + 28, 36, 16), "FPM", _unitStyle, new Color(0.65f, 0.75f, 0.88f));
 
-                // --- 右焦点：接地空速 (TOUCHDOWN SPEED) ---
+                // --- 右焦点：接地空速 ---
                 DrawShadowLabel(new Rect(col2X, contentY, colW, 14), "TOUCHDOWN SPEED", _fieldLabelStyle, new Color(0.60f, 0.70f, 0.85f));
                 DrawShadowLabel(new Rect(col2X, contentY + 12, colW - 34, 38), _report.strSpeedMain, _bigNumberStyle, Color.white);
                 DrawShadowLabel(new Rect(col2X + colW - 32, contentY + 28, 32, 16), "KTS", _unitStyle, new Color(0.65f, 0.75f, 0.88f));
@@ -800,17 +815,17 @@ namespace SimplePlanes2.LandingRate
                 GUI.color = new Color(0.30f, 0.40f, 0.55f, alpha * 0.40f);
                 GUI.DrawTexture(new Rect(cardX + 20, cardY + 96, cardW - 40, 1), _pixelWhite);
 
-                // 5. 底部姿态角行 (Pitch & Roll)
+                // 5. 底部姿态角行
                 GUI.color = new Color(1f, 1f, 1f, alpha);
                 DrawShadowLabel(new Rect(cardX, cardY + 104, cardW, 16), _report.strAttitude, _footerStyle, _footerStyle.normal.textColor);
 
-                // 6. 最底部极细停留倒计时进度条
+                // 6. 底部倒计时进度条
                 float remainProgress = Mathf.Clamp01(_displayTimer / _totalDuration);
                 GUI.color = new Color(_report.accentColor.r, _report.accentColor.g, _report.accentColor.b, alpha * 0.75f);
                 GUI.DrawTexture(new Rect(cardX + 16, cardY + cardH - 3, (cardW - 32) * remainProgress, 2), _pixelWhite);
-
-                GUI.color = prevGuiColor;
             }
+
+            GUI.color = rootColor;
         }
 
         private void OnDestroy()
@@ -821,7 +836,6 @@ namespace SimplePlanes2.LandingRate
             if (_scopeBgTex != null) Destroy(_scopeBgTex);
 
             if (_pathLineObj != null) Destroy(_pathLineObj);
-            if (_pathLineMaterial != null) Destroy(_pathLineMaterial);
         }
     }
 }
