@@ -11,7 +11,7 @@ using Assets.Scripts.Craft.Parts.Modifiers;
 
 namespace SimplePlanes2.LandingRate
 {
-    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "4.0.0")]
+    [BepInPlugin("com.noraneko.sp2.landingrate", "Landing Rate & Flight Analyzer", "4.1.0")]
     public class LandingRateMonitor : BaseUnityPlugin
     {
         // 快捷键配置 (硬重置为无冲突单键: F7 实时 G 力示波器)
@@ -111,6 +111,9 @@ namespace SimplePlanes2.LandingRate
         private GUIStyle _scopeTitleStyle;
         private GUIStyle _scopeLegendStyle;
 
+        // X-Plane 12 风格 3D 轨迹组件引用
+        private FlightPathRecorder _flightPathRecorder;
+
         private void Awake()
         {
             _keyScope = Config.Bind("Controls_v4", "KeyGForceScope", KeyCode.F7, "实时 G 力示波器开关快捷键 (默认 F7)");
@@ -126,7 +129,10 @@ namespace SimplePlanes2.LandingRate
                 _scopeBuffer[i] = new ScopeSample { rawG = 1.0f, isTouchdown = false };
             }
 
-            Logger.LogInfo("[LandingRateMonitor v4.0.0] 架构精简完成：纯净 G 力示波器 (F7) + 自动着陆大字 HUD 已就绪。");
+            // 挂载 3D 历史飞行轨迹核心模块 (F8 切换 / F9 清除)
+            _flightPathRecorder = this.gameObject.AddComponent<FlightPathRecorder>();
+
+            Logger.LogInfo("[LandingRateMonitor v4.1.0] 纯净 G 力示波器 (F7) + 3D 轨迹 (F8/F9) + 自动着陆大字 HUD 已就绪。");
         }
 
         private static void InitNativeDelegates()

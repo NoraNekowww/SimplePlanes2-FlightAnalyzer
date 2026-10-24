@@ -34,6 +34,7 @@ $bepCore = Join-Path $GameDir "BepInEx\core"
 
 $csc = "C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 $source = Join-Path $PSScriptRoot "LandingRateMonitor.cs"
+$sourcePathRecorder = Join-Path $PSScriptRoot "FlightPathRecorder.cs"
 $outDir = Join-Path $PSScriptRoot "artifacts"
 if (-not (Test-Path $outDir)) {
     New-Item -ItemType Directory -Path $outDir -Force | Out-Null
@@ -73,10 +74,11 @@ $cmdArgs = @(
     "/reference:$refUnityPhysics",
     "/reference:$refUnityInput",
     "/reference:$refUnityText",
-    $source
+    $source,
+    $sourcePathRecorder
 )
 
-Write-Host "Compiling LandingRateMonitor.dll (v4.0.0 Clean Architecture)..."
+Write-Host "Compiling LandingRateMonitor.dll (v4.1.0 3D Flight Path & Flight Analyzer)..."
 & $csc $cmdArgs
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Compilation failed with exit code $LASTEXITCODE"

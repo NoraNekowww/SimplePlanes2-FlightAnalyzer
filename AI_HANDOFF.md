@@ -92,32 +92,31 @@
 
 ---
 
-## 5. 后续 AI 实现 3D 轨迹线的明确技术路线推荐
+## 5. v4.1.0 现已完全跑通的 X-Plane 12 风格 3D 飞行历史轨迹 (FlightPathRecorder)
 
-如果后续需要重新实现 3D 轨迹线（常驻细线），**强烈推荐以下经过验证的可行路径**：
+在 **v4.1.0** 中，已成功攻克 3D 轨迹渲染的技术瓶颈，采用高内聚的 **Procedural Mesh** 方案实现了原汁原味的《X-Plane 12》飞行姿态与高度下滑道双层渲染：
 
-### 推荐路径 A：挂载官方机翼翼尖涡流拖尾（TrailRenderer 克隆）
-- **原理**：SP2 游戏原生支持高 G 过载拉烟或机翼翼尖拖尾（`Assets.Scripts.Craft.Wings.VFX.WingTrailRenderer`）。游戏在内部已经拥有经过 URP 深度认证、保证 100% 可见的光栅化 TrailRenderer 材质。
-- **实现方式**：
-  1. 在 `AircraftScript` 上的翼尖或机尾粒子节点中，查找现有的 `TrailRenderer` 预制体或组件；
-  2. 克隆其 `sharedMaterial`，挂载一个自定义的 `TrailRenderer`，将其 `time` 设置为 `999999f`（永久留存，不随时间淡出消散），`minVertexDistance` 设为 `1.2f`；
-  3. 通过 `trailRenderer.enabled` 开关航迹可见性。
-- **优点**：100% 使用游戏官方已经跑通并配置好 URP Pass 的材质，绝无 Shader Stripping 剔除问题，天生具备抗锯齿与深度光栅化。
+### 5.1 核心架构与技术突破
+1. **机翼姿态飘带（Wing Ribbon）**：
+   - 根据飞机实时世界坐标、四元数姿态与设定翼展（`ribbonWingspan`），动态解算左右翼端点。
+   - 采用 Quad Strip 算法，构建**正反两套三角形索引（双面渲染）**，彻底消灭飞机大坡度盘旋、横滚倒飞时的背面剔除（Backface Culling）隐形问题。
+2. **地面高度下滑道幕布（Vertical Curtain）**：
+   - 飞机中心向下物理 Raycast 探测真实地形高度（未命中则优雅投射至海平面 Y=0）。
+   - 每隔 N 个采样点（默认 10）打下高亮加深的垂直刻度线（Milestone Tick），幕布底部半透明渐隐，完美还原 X-Plane 12 全息进近下滑道视觉纵深。
+3. **URP Shader Stripping 防御机制**：
+   - 运行时探测 Shader：优先 `Universal Render Pipeline/Unlit`，次选 `Sprites/Default`、`Universal Render Pipeline/Particles/Unlit` 等。
+   - **兜底克隆**：若独立发布版将 Shader 剥离，自动通过 `Resources.FindObjectsOfTypeAll<Material>()` 从游戏已加载资源中提取带顶点色的原生合法材质作为模板 Clone，确保 100% 参与 URP 光栅化渲染。
+4. **浮动原点（Floating Origin）双重容灾补偿**：
+   - **原生事件**：启动时自动反射订阅 `Assets.Scripts.Flight.FloatingOriginScript.Instance.Repositioned`，捕获 `e.Delta` 并在世界原点重置时平移已记录的所有历史坐标。
+   - **自适应检测**：在 `LateUpdate` 中差分对比帧间位移，扣除飞机物理惯性速度推算值后，一旦发现跳变超过 500 米，自动对所有历史坐标施加反向平移补偿，杜绝轨迹拉扯。
+5. **智能采样与 32 位定容缓冲**：
+   - 基于位移（`dist >= 3.0m`）或姿态旋转（`angle >= 5.0°`）触发采样，消除停机滑行时的冗余顶点。
+   - 开启 `mesh.indexFormat = IndexFormat.UInt32`，结合 5000 点定容滑动窗口（Sliding Window FIFO），零 GC 内存顿挫。
 
-### 推荐路径 B：GL.LINES 立即模式渲染（OnPostRender / OnRenderObject）
-- **原理**：在主相机挂载一个简单的 MonoBehaviour 脚本，在 `OnRenderObject()` 或 `OnPostRender()` 回调中使用底层 `GL.Begin(GL.LINES)`：
-  ```csharp
-  GL.PushMatrix();
-  lineMaterial.SetPass(0);
-  GL.Begin(GL.LINES);
-  for (int i = 0; i < points.Count - 1; i++) {
-      GL.Vertex(points[i]);
-      GL.Vertex(points[i + 1]);
-  }
-  GL.End();
-  GL.PopMatrix();
-  ```
-- **关键细节**：材质必须使用 `new Material(Shader.Find("Hidden/Internal-Colored"))`，并且在 Unity URP 下需要确保脚本组件挂在渲染该相机的 Camera GameObject 上。
+### 5.2 交互快捷键（Zero-Conflict 原则）
+- **`F8`**：循环切换显示模式（关闭 -> 仅机翼飘带 -> 飘带+地面高度幕布 -> 仅单线轨迹）。
+- **`F9`**：一键清空当前已记录的所有历史轨迹点。
+- **`F7`**：实时 G 力示波器开关（沿用 v4.0.0）。
 
 ---
 
